@@ -1,0 +1,134 @@
+# 工作流名称
+name: openppp2-build
+
+# 触发条件
+on:
+  workflow_dispatch:  # 手动触发
+    inputs:
+      tag_name:
+        description: '输入发布的 tag 名称'  # 用户输入参数
+        required: true
+        default: 'v1.0.0'  # 默认版本号
+
+# 构建任务
+jobs:
+  build:
+    # 构建策略
+    strategy:
+      fail-fast: false  # 一个任务失败不影响其他任务
+      matrix:
+        os: [ubuntu-24.04]  # 操作系统
+        arch: [amd64,arm64]  # 架构
+
+    runs-on: ${{ matrix.os }}  # 运行环境
+    env:
+      ACTIONS_ALLOW_UNSECURE_COMMANDS: true  # 允许不安全命令
+      BOOST_VERSION: 1.86.0  # Boost 版本
+      JEMALLOC_VERSION: 5.3.0  # Jemalloc 版本
+      OPENSSL_VERSION: 3.4.0  # OpenSSL 版本
+
+    # 构建步骤
+    steps:
+    # 1. 检出代码库
+    - name: Checkout openppp2 repository
+      uses: actions/checkout@v4
+      with:
+        repository: liulilittle/openppp2
+        path: openppp2
+        ref: main
+
+    # 2. 设置第三方库目录环境变量
+    - name: Set THIRD_PARTY_LIBRARY_DIR environment variables
+      run: |
+        echo "THIRD_PARTY_LIBRARY_DIR=$GITHUB_WORKSPACE" >> $GITHUB_ENV
+
+    # 3. 替换 CMakeLists.txt 中的路径
+    - name: Replace THIRD_PARTY_LIBRARY_DIR in CMakeLists.txt
+      run: |
+        cd openppp2
+        sed -i 's|SET(THIRD_PARTY_LIBRARY_DIR /root/dev)|SET(THIRD_PARTY_LIBRARY_DIR $ENV{THIRD_PARTY_LIBRARY_DIR})|' CMakeLists.txt
+
+    # 4. 安装系统依赖
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          autoconf automake build-essential ca-certificates \
+          clang cmake curl g++ gcc gdb git libicu-dev \
+          libkrb5-dev libssl-dev libunwind8 net-tools \
+          openssl unzip zip
+
+    # 5. 构建 Boost 库
+    - name: Build boost
+      run: |
+        BOOST_VERSION_UNDERSCORE=$(echo ${{ env.BOOST_VERSION }} | sed 's/\./_/g')
+        wget https://archives.boost.io/release/${{ env.BOOST_VERSION }}/source/boost_${BOOST_VERSION_UNDERSCORE}.tar.bz2
+        tar jxvf boost*.tar.bz2
+        rm -rf boost*.tar.bz2
+        mv boost* boost
+        cd boost
+        ./bootstrap.sh
+        ./b2 cxxflags=-fPIC
+
+    # 6. 构建 Jemalloc 库
+    - name: Build jemalloc
+      run: |
+        wget https://github.com/jemalloc/jemalloc/releases/download/${{ env.JEMALLOC_VERSION }}/jemalloc-${{ env.JEMALLOC_VERSION }}.tar.bz2
+        tar jxvf jemalloc*.tar.bz2
+        rm -rf jemalloc*.tar.bz2
+        mv jemalloc* jemalloc
+        cd jemalloc
+        ./autogen.sh --with-jemalloc-prefix=je_
+        make -j $(nproc)
+
+    # 7. 构建 OpenSSL 库
+    - name: Build openssl
+      run: |
+        wget https://github.com/openssl/openssl/releases/download/openssl-${{ env.OPENSSL_VERSION }}/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
+        tar zxvf openssl*.tar.gz
+        rm -rf openssl*.tar.gz
+        mv openssl* openssl
+        cd openssl
+        ./Configure
+        make -j $(nproc)
+
+    # 8. 构建 openppp2 项目
+    - name: Build openppp2
+      run: |
+        cd openppp2
+        mkdir -p build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release
+        make -j $(nproc)
+
+    # 9. 打包构建产物
+    - name: Zip and list the built files
+      run: |
+        ARCH=${{ matrix.arch }}
+        PLATFORM=linux-${ARCH}
+        cd openppp2/bin
+        ARTIFACT_NAME=openppp2-${PLATFORM}.zip
+        zip -r $ARTIFACT_NAME ppp
+        echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $GITHUB_ENV
+
+    # 10. 上传构建产物
+    - name: Archive openppp2
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.ARTIFACT_NAME }}
+        path: openppp2/bin/${{ env.ARTIFACT_NAME }}
+
+    # 11. 记录构建时间
+    - name: Set build time
+      run: |
+        echo "BUILD_TIME=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+
+    # 12. 创建 GitHub Release
+    - name: Create GitHub Release with Build Time
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ./openppp2/bin/*  # 包含的文件
+        tag_name: ${{ github.event.inputs.tag_name }}  # 使用输入的 tag
+        body: "Build time: ${{ env.BUILD_TIME }}"  # 发布说明
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # GitHub 认证

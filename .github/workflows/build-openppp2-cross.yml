@@ -1,0 +1,211 @@
+name: build-openppp2-cross  # 交叉编译
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: '输入发布的 tag 名称'
+        required: true
+        default: 'v2.0.0'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        platform: 
+          - linux/amd64
+          - linux/aarch64
+          - linux/armv7l
+          - linux/ppc64el
+          - linux/s390x
+          - linux/riscv64
+          - linux/mipsel
+
+    runs-on: ${{ matrix.os }}
+    env:
+      ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+
+    steps:
+    - name: Checkout openppp2
+      uses: actions/checkout@v4
+      with:
+        repository: liulilittle/openppp2
+        path: openppp2
+        ref: main
+
+    - name: Checkout 3rd party libraries
+      uses: actions/checkout@v4
+      with:
+        repository: liulilittle/openppp2-ubuntu-3rd-environment
+        path: 3rd
+
+    - name: Set THIRD_PARTY_LIBRARY_DIR environment variables
+      run: |
+        case ${{ matrix.platform }} in
+          linux/amd64)
+            echo "THIRD_PARTY_LIBRARY_DIR=${GITHUB_WORKSPACE}/3rd/amd64" >> $GITHUB_ENV
+            ;;
+          linux/aarch64)
+            echo "THIRD_PARTY_LIBRARY_DIR=${GITHUB_WORKSPACE}/3rd/aarch64" >> $GITHUB_ENV
+            ;;
+          linux/armv7l)
+            echo "THIRD_PARTY_LIBRARY_DIR=${GITHUB_WORKSPACE}/3rd/armv7l" >> $GITHUB_ENV
+            ;;
+          linux/ppc64el)
+            echo "THIRD_PARTY_LIBRARY_DIR=${GITHUB_WORKSPACE}/3rd/ppc64el" >> $GITHUB_ENV
+            ;;
+          linux/s390x)
+            echo "THIRD_PARTY_LIBRARY_DIR=${GITHUB_WORKSPACE}/3rd/s390x" >> $GITHUB_ENV
+            ;;
+          linux/riscv64)
+            echo "THIRD_PARTY_LIBRARY_DIR=${GITHUB_WORKSPACE}/3rd/riscv64" >> $GITHUB_ENV
+            ;;
+          linux/mipsel)
+            echo "THIRD_PARTY_LIBRARY_DIR=${GITHUB_WORKSPACE}/3rd/mipsel" >> $GITHUB_ENV
+            ;;
+          *)
+            echo "Unsupported platform: ${{ matrix.platform }}"
+            exit 1
+            ;;
+        esac
+
+    - name: Select compiler
+      run: |
+        case ${{ matrix.platform }} in
+          linux/amd64)
+            echo "PLATFORM_LD=ld" >> $GITHUB_ENV
+            echo "PLATFORM_CC=gcc" >> $GITHUB_ENV
+            echo "PLATFORM_CXX=g++" >> $GITHUB_ENV
+            ;;
+          linux/aarch64)
+            echo "PLATFORM_LD=aarch64-linux-gnu-ld" >> $GITHUB_ENV
+            echo "PLATFORM_CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+            echo "PLATFORM_CXX=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+            ;;
+          linux/armv7l)
+            echo "PLATFORM_LD=arm-linux-gnueabihf-ld" >> $GITHUB_ENV
+            echo "PLATFORM_CC=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
+            echo "PLATFORM_CXX=arm-linux-gnueabihf-g++" >> $GITHUB_ENV
+            ;;
+          linux/ppc64el)
+            echo "PLATFORM_LD=powerpc64le-linux-gnu-ld" >> $GITHUB_ENV
+            echo "PLATFORM_CC=powerpc64le-linux-gnu-gcc" >> $GITHUB_ENV
+            echo "PLATFORM_CXX=powerpc64le-linux-gnu-g++" >> $GITHUB_ENV
+            ;;
+          linux/s390x)
+            echo "PLATFORM_LD=s390x-linux-gnu-ld" >> $GITHUB_ENV
+            echo "PLATFORM_CC=s390x-linux-gnu-gcc" >> $GITHUB_ENV
+            echo "PLATFORM_CXX=s390x-linux-gnu-g++" >> $GITHUB_ENV
+            ;;
+          linux/riscv64)
+            echo "PLATFORM_LD=riscv64-linux-gnu-ld" >> $GITHUB_ENV
+            echo "PLATFORM_CC=riscv64-linux-gnu-gcc" >> $GITHUB_ENV
+            echo "PLATFORM_CXX=riscv64-linux-gnu-g++" >> $GITHUB_ENV
+            ;;
+          linux/mipsel)
+            echo "PLATFORM_LD=mipsel-linux-gnu-ld" >> $GITHUB_ENV
+            echo "PLATFORM_CC=mipsel-linux-gnu-gcc" >> $GITHUB_ENV
+            echo "PLATFORM_CXX=mipsel-linux-gnu-g++" >> $GITHUB_ENV
+            ;;
+          *)
+            echo "Unsupported platform: ${{ matrix.platform }}"
+            exit 1
+            ;;
+        esac
+
+    - name: Replace THIRD_PARTY_LIBRARY_DIR in CMakeLists.txt
+      run: |
+        cd openppp2
+        sed -i 's|SET(THIRD_PARTY_LIBRARY_DIR /root/dev)|SET(THIRD_PARTY_LIBRARY_DIR $ENV{THIRD_PARTY_LIBRARY_DIR})|' CMakeLists.txt
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          autoconf \
+          build-essential \
+          clang \
+          cmake \
+          curl \
+          gcc-multilib \
+          gdb \
+          git \
+          libicu-dev \
+          libkrb5-dev \
+          libssl-dev \
+          libunwind8 \
+          net-tools \
+          openssl \
+          unzip \
+          zip
+
+    - name: Install cross compilers
+      run: |
+        case ${{ matrix.platform }} in
+          linux/amd64)
+            sudo apt-get install -y gcc g++
+            ;;
+          linux/aarch64)
+            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+            ;;
+          linux/armv7l)
+            sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+            ;;
+          linux/ppc64el)
+            sudo apt-get install -y gcc-powerpc64le-linux-gnu g++-powerpc64le-linux-gnu
+            ;;
+          linux/s390x)
+            sudo apt-get install -y gcc-s390x-linux-gnu g++-s390x-linux-gnu
+            ;;
+          linux/riscv64)
+            sudo apt-get install -y gcc-riscv64-linux-gnu g++-riscv64-linux-gnu
+            ;;
+          linux/mipsel)
+            sudo apt-get install -y gcc-mipsel-linux-gnu g++-mipsel-linux-gnu
+            ;;
+          *)
+            echo "Unsupported platform: ${{ matrix.platform }}"
+            exit 1
+            ;;
+        esac
+
+    - name: Build openppp2
+      run: |
+        cd openppp2
+        mkdir -p build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_C_COMPILER=${{ env.PLATFORM_CC }} \
+                -DCMAKE_CXX_COMPILER=${{ env.PLATFORM_CXX }} \
+                -DCMAKE_LINKER=${{ env.PLATFORM_LD }}
+        make -j $(nproc)
+
+    - name: Prepare artifact
+      run: |
+        PLATFORM=${{ matrix.platform }}
+        PLATFORM=${PLATFORM//\//-}
+        cd openppp2/bin
+        ARTIFACT_NAME=openppp2-${PLATFORM}.zip
+        zip -r $ARTIFACT_NAME ppp
+        echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $GITHUB_ENV
+
+    - name: Set build time
+      run: |
+        echo "BUILD_TIME=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.ARTIFACT_NAME }}
+        path: openppp2/bin/${{ env.ARTIFACT_NAME }}
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ./openppp2/bin/*.zip
+        tag_name: ${{ github.event.inputs.tag_name }}
+        body: "Build time: ${{ env.BUILD_TIME }}"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

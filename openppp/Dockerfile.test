@@ -1,0 +1,31 @@
+# 准备最终镜像
+FROM ubuntu:latest
+
+# 设置工作目录为/opt，与安装脚本保持一致
+WORKDIR /opt
+
+# 复制安装脚本
+COPY openppp/install.sh /tmp
+
+# 安装运行时依赖，并配置系统环境
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    dnsutils \
+    iptables \
+    iproute2 \
+    iputils-ping \
+    lsof \
+    net-tools \
+    netperf \
+    tzdata \
+    unzip \
+    vim && \
+    ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
+    dpkg-reconfigure -f noninteractive tzdata && \
+    chmod +x /tmp/install.sh && \
+    sh /tmp/install.sh && \
+    rm -rf /var/lib/apt/lists/*
+
+# 根据安装脚本修改入口点
+ENTRYPOINT ["/opt/ppp"]
