@@ -6,14 +6,14 @@ on:
       tag_name:
         description: '输入发布的 tag 名称'
         required: true
-        default: 'v2.0.0'
+        default: 'v0.0.1'
 
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-22.04]
         platform: 
           - linux/amd64
           - linux/aarch64
@@ -22,6 +22,21 @@ jobs:
           - linux/s390x
           - linux/riscv64
           - linux/mipsel
+        include:
+          - platform: linux/amd64
+            platform_name: linux-amd64
+          - platform: linux/aarch64
+            platform_name: linux-aarch64
+          - platform: linux/armv7l
+            platform_name: linux-armv7l
+          - platform: linux/ppc64el
+            platform_name: linux-ppc64el
+          - platform: linux/s390x
+            platform_name: linux-s390x
+          - platform: linux/riscv64
+            platform_name: linux-riscv64
+          - platform: linux/mipsel
+            platform_name: linux-mipsel
 
     runs-on: ${{ matrix.os }}
     env:
@@ -34,6 +49,16 @@ jobs:
         repository: liulilittle/openppp2
         path: openppp2
         ref: main
+
+    - name: Validate ARTIFACT_NAME
+      run: |
+        PLATFORM=${{ matrix.platform_name }}
+        if [[ -z "${PLATFORM}" ]]; then
+          echo "Error: PLATFORM is empty"
+          exit 1
+        fi
+        ARTIFACT_NAME=openppp2-${PLATFORM}.zip
+        echo "ARTIFACT_NAME=${ARTIFACT_NAME}" >> $GITHUB_ENV
 
     - name: Checkout 3rd party libraries
       uses: actions/checkout@v4
@@ -184,16 +209,12 @@ jobs:
 
     - name: Prepare artifact
       run: |
-        PLATFORM=${{ matrix.platform }}
-        PLATFORM=${PLATFORM//\//-}
         cd openppp2/bin
-        ARTIFACT_NAME=openppp2-${PLATFORM}.zip
-        zip -r $ARTIFACT_NAME ppp
-        echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $GITHUB_ENV
+        zip -r ${{ env.ARTIFACT_NAME }} ppp
 
     - name: Set build time
       run: |
-        echo "BUILD_TIME=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+        echo "BUILD_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4

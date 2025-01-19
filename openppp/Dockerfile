@@ -18,7 +18,7 @@ FROM ubuntu:latest
 WORKDIR /opt
 
 # 复制构建好的应用到最终镜像
-COPY --from=builder /env/openppp2/bin /opt
+COPY --from=builder /opt/openppp2/bin /opt
 
 # 安装运行时依赖，并配置系统环境
 RUN apt-get update && apt-get install -y --no-install-recommends \

@@ -1,17 +1,19 @@
-name: build-miaospeed-docker
+name: build-openppp2-env5
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Docker image tag,默认为latest'
+        description: 'Docker image tag,默认使用env'
         required: false
-        default: 'latest'
+        default: 'env'
 
 env:
   REGISTRY_GHCR: ghcr.io
-  REGISTRY_DOCKERHUB: docker.io
-  IMAGE_NAME: ${{ github.repository_owner }}/miaospeed
+  IMAGE_NAME: ${{ github.repository_owner }}/openppp2
+  BOOST_VERSION: 1.86.0   # 设置默认的Boost版本
+  JEMALLOC_VERSION: 5.3.0 # 设置默认的jemalloc版本
+  OPENSSL_VERSION: 3.4.0  # 设置默认的OpenSSL版本
 
 jobs:
   build-and-push:
@@ -38,12 +40,6 @@ jobs:
         with:
           buildkitd-flags: --debug
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -55,7 +51,7 @@ jobs:
         id: get_tag
         run: |
           if [ -z "${{ github.event.inputs.tag }}" ]; then
-            TAG=$(git describe --tags --always)
+            TAG="env"
           else
             TAG=${{ github.event.inputs.tag }}
           fi
@@ -69,18 +65,17 @@ jobs:
             echo "Docker tag must match regex: [a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}"
             exit 1
           fi
-
-      - name: Build and push platform-specific images
+          
+      - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./miaospeed/Dockerfile
+          file: ./openppp/env.Dockerfile
           push: true
           platforms: ${{ matrix.platform }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: |
-            ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${{ steps.get_tag.outputs.tag }}
             ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.get_tag.outputs.tag }}
           provenance: false
 
@@ -88,7 +83,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p /tmp/digests
-          DIGEST=$(docker buildx imagetools inspect ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${{ steps.get_tag.outputs.tag }} --format '{{json .Manifest.Digest}}')
+          DIGEST=$(docker buildx imagetools inspect ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.get_tag.outputs.tag }} --format '{{json .Manifest.Digest}}')
           echo $DIGEST > /tmp/digests/${{ matrix.platform_name }}
         env:
           DOCKER_CLI_EXPERIMENTAL: enabled
@@ -114,11 +109,15 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          images: |
+            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ github.event.inputs.tag }}
+            type=raw,value=env
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -126,17 +125,6 @@ jobs:
           registry: ${{ env.REGISTRY_GHCR }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}
-            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=${{ github.event.inputs.tag }}
-            type=raw,value=latest
 
       - name: Create manifest list and push
         working-directory: /tmp/digests
@@ -147,14 +135,9 @@ jobs:
           DIGEST_ARM64=$(cat linux-arm64 | tr -d '"')
 
           docker buildx imagetools create $DOCKER_TAGS \
-            ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}@$DIGEST_AMD64 \
-            ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}@$DIGEST_ARM64
-          
-          docker buildx imagetools create $DOCKER_TAGS \
             ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}@$DIGEST_AMD64 \
             ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}@$DIGEST_ARM64
 
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
           docker buildx imagetools inspect ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
