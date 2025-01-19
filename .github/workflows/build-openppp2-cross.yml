@@ -6,14 +6,14 @@ on:
       tag_name:
         description: '输入发布的 tag 名称'
         required: true
-        default: 'v2.0.0'
+        default: 'v0.0.1'
 
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-20.04]
         platform: 
           - linux/amd64
           - linux/aarch64
@@ -193,7 +193,7 @@ jobs:
 
     - name: Set build time
       run: |
-        echo "BUILD_TIME=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+        echo "BUILD_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
