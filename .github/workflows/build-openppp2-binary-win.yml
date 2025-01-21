@@ -1,0 +1,145 @@
+name: build-openppp2-binary-win # 发布二进制文件
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: '输入发布的 tag 名称'
+        required: true
+        default: 'v1.0.1'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+        platform: 
+          - windows/amd64
+          - windows/x86
+        include:
+          - platform: windows/amd64
+            platform_name: windows-amd64
+          - platform: windows/x86
+            platform_name: windows-i386
+
+    runs-on: ${{ matrix.os }}
+    env:
+      ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+      BOOST_VERSION: 1.86.0
+      JEMALLOC_VERSION: 5.3.0
+      OPENSSL_VERSION: 3.4.0
+
+    steps:
+    - name: Checkout openppp2 repository
+      uses: actions/checkout@v4
+      with:
+        repository: liulilittle/openppp2
+        path: openppp2
+        ref: main
+
+    - name: Validate ARTIFACT_NAME
+      shell: bash
+      run: |
+        PLATFORM=${{ matrix.platform_name }}
+        if [[ -z "${PLATFORM}" ]]; then
+          echo "Error: PLATFORM is empty"
+          exit 1
+        fi
+        ARTIFACT_NAME=openppp2-${PLATFORM}.zip
+        echo "ARTIFACT_NAME=${ARTIFACT_NAME}" >> $GITHUB_ENV
+
+    - name: Set THIRD_PARTY_LIBRARY_DIR environment variables
+      shell: bash
+      run: |
+        echo "THIRD_PARTY_LIBRARY_DIR=$GITHUB_WORKSPACE" >> $GITHUB_ENV
+
+    - name: Replace THIRD_PARTY_LIBRARY_DIR in CMakeLists.txt
+      shell: bash
+      run: |
+        cd openppp2
+        sed -i 's|SET(THIRD_PARTY_LIBRARY_DIR /root/dev)|SET(THIRD_PARTY_LIBRARY_DIR $ENV{THIRD_PARTY_LIBRARY_DIR})|' CMakeLists.txt
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        choco install -y cmake
+        choco install -y 7zip
+        choco install -y visualstudio2022community
+        choco install -y visualstudio2022-workload-nativedesktop
+
+    - name: Build boost
+      shell: bash
+      run: |
+        BOOST_VERSION_UNDERSCORE=$(echo ${{ env.BOOST_VERSION }} | sed 's/\./_/g')
+        wget https://archives.boost.io/release/${{ env.BOOST_VERSION }}/source/boost_${BOOST_VERSION_UNDERSCORE}.tar.bz2
+        7z x boost*.tar.bz2
+        7z x boost*.tar
+        rm -rf boost*.tar.bz2 boost*.tar
+        mv boost* boost
+        cd boost
+        ./bootstrap.bat
+        ./b2 toolset=msvc
+
+    - name: Build jemalloc
+      shell: bash
+      run: |
+        wget https://github.com/jemalloc/jemalloc/releases/download/${{ env.JEMALLOC_VERSION }}/jemalloc-${{ env.JEMALLOC_VERSION }}.tar.bz2
+        7z x jemalloc*.tar.bz2
+        7z x jemalloc*.tar
+        rm -rf jemalloc*.tar.bz2 jemalloc*.tar
+        mv jemalloc* jemalloc
+        cd jemalloc
+        ./autogen.sh --with-jemalloc-prefix=je_
+        make -j $(nproc)
+
+    - name: Build openssl
+      shell: bash
+      run: |
+        wget https://github.com/openssl/openssl/releases/download/openssl-${{ env.OPENSSL_VERSION }}/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
+        7z x openssl*.tar.gz
+        7z x openssl*.tar
+        rm -rf openssl*.tar.gz openssl*.tar
+        mv openssl* openssl
+        cd openssl
+        perl Configure VC-WIN64A
+        nmake
+
+    - name: Build openppp2
+      shell: bash
+      run: |
+        cd openppp2
+        mkdir -p build
+        cd build
+        if [[ "${{ matrix.platform }}" == "windows/amd64" ]]; then
+          cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+        else
+          cmake .. -G "Visual Studio 17 2022" -A Win32 -DCMAKE_BUILD_TYPE=Release
+        fi
+        cmake --build . --config Release --parallel
+
+    - name: Zip and list the built files
+      shell: bash
+      run: |
+        cd openppp2/bin/Release
+        7z a ${{ env.ARTIFACT_NAME }} ppp.exe
+
+    - name: Archive openppp2
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.ARTIFACT_NAME }}
+        path: openppp2/bin/Release/${{ env.ARTIFACT_NAME }}
+
+    - name: Set build time
+      shell: bash
+      run: |
+        echo "BUILD_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+
+    - name: Create GitHub Release with Build Time
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ./openppp2/bin/Release/*
+        tag_name: ${{ github.event.inputs.tag_name }}
+        body: "Build time: ${{ env.BUILD_TIME }}"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
