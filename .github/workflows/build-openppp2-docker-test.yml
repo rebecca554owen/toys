@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '输入 openppp2 版本号,默认为v1.0.0'
+        description: '输入 openppp2 版本号,默认为最新版'
         required: false
-        default: 'v1.0.0'
+        default: 'latest'
 
 env:
   REGISTRY_GHCR: ghcr.io

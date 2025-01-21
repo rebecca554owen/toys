@@ -6,7 +6,7 @@ on:
       tag_name:
         description: '输入发布的 tag 名称'
         required: true
-        default: 'v0.0.1'
+        default: 'io'
 
 jobs:
   build:
@@ -22,6 +22,7 @@ jobs:
           - linux/s390x
           - linux/riscv64
           - linux/mipsel
+        io_uring: [true, false]
         include:
           - platform: linux/amd64
             platform_name: linux-amd64
@@ -37,6 +38,17 @@ jobs:
             platform_name: linux-riscv64
           - platform: linux/mipsel
             platform_name: linux-mipsel
+        exclude:
+          - platform: linux/armv7l
+            io_uring: true
+          - platform: linux/ppc64el
+            io_uring: true
+          - platform: linux/s390x
+            io_uring: true
+          - platform: linux/riscv64
+            io_uring: true
+          - platform: linux/mipsel
+            io_uring: true
 
     runs-on: ${{ matrix.os }}
     env:
@@ -57,7 +69,11 @@ jobs:
           echo "Error: PLATFORM is empty"
           exit 1
         fi
-        ARTIFACT_NAME=openppp2-${PLATFORM}.zip
+        if ${{ matrix.io_uring }}; then
+          ARTIFACT_NAME=openppp2-${PLATFORM}-io-uring.zip
+        else
+          ARTIFACT_NAME=openppp2-${PLATFORM}.zip
+        fi
         echo "ARTIFACT_NAME=${ARTIFACT_NAME}" >> $GITHUB_ENV
 
     - name: Checkout 3rd party libraries
@@ -145,6 +161,12 @@ jobs:
         cd openppp2
         sed -i 's|SET(THIRD_PARTY_LIBRARY_DIR /root/dev)|SET(THIRD_PARTY_LIBRARY_DIR $ENV{THIRD_PARTY_LIBRARY_DIR})|' CMakeLists.txt
 
+    - name: Enable IO_URING in CMakeLists.txt
+      if: ${{ matrix.io_uring }}
+      run: |
+        cd openppp2
+        sed -i 's|#add_definitions(-DBOOST_ASIO_HAS_IO_URING)|add_definitions(-DBOOST_ASIO_HAS_IO_URING)|' CMakeLists.txt
+
     - name: Install dependencies
       run: |
         sudo apt-get update
@@ -161,6 +183,7 @@ jobs:
           libkrb5-dev \
           libssl-dev \
           libunwind8 \
+          liburing-dev \
           net-tools \
           openssl \
           unzip \
@@ -204,7 +227,8 @@ jobs:
         cmake .. -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_C_COMPILER=${{ env.PLATFORM_CC }} \
                 -DCMAKE_CXX_COMPILER=${{ env.PLATFORM_CXX }} \
-                -DCMAKE_LINKER=${{ env.PLATFORM_LD }}
+                -DCMAKE_LINKER=${{ env.PLATFORM_LD }} \
+                -DBOOST_ASIO_HAS_IO_URING=${{ fromJSON(matrix.io_uring) && 1 || 0 }}
         make -j $(nproc)
 
     - name: Prepare artifact
