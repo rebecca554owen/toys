@@ -9,9 +9,17 @@ ARG VERSION=v1.0.0
 RUN ARCH=$(uname -m) && \
     BITS=$(getconf LONG_BIT) && \
     if [ "$ARCH" = "x86_64" ] && [ "$BITS" = "64" ]; then \
-        ARCH="linux-amd64"; \
+        if [ "$VERSION" = "io" ]; then \
+            ARCH="linux-amd64-io-uring"; \
+        else \
+            ARCH="linux-amd64"; \
+        fi; \
     elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
-        ARCH="linux-aarch64"; \
+        if [ "$VERSION" = "io" ]; then \
+            ARCH="linux-aarch64-io-uring"; \
+        else \
+            ARCH="linux-aarch64"; \
+        fi; \
     elif [ "$ARCH" = "armv7l" ]; then \
         ARCH="linux-armv7l"; \
     else \
