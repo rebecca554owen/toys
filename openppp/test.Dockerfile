@@ -5,7 +5,7 @@ FROM ghcr.io/rebecca554owen/openppp2:env AS builder
 WORKDIR /opt
 
 # 设置版本号和架构
-ARG VERSION=v1.0.0
+ARG VERSION=latest
 RUN ARCH=$(uname -m) && \
     BITS=$(getconf LONG_BIT) && \
     if [ "$ARCH" = "x86_64" ] && [ "$BITS" = "64" ]; then \
@@ -23,10 +23,18 @@ RUN ARCH=$(uname -m) && \
     fi && \
     apt-get update && apt-get install -y wget && \
     # 下载正常版本
-    wget "https://github.com/rebecca554owen/toys/releases/download/${VERSION}/openppp2-${ARCH_NORMAL}.zip" -O "/opt/openppp2-normal.zip" && \
+    if [ "$VERSION" = "latest" ]; then \
+        wget "https://github.com/rebecca554owen/toys/releases/latest/download/openppp2-${ARCH_NORMAL}.zip" -O "/opt/openppp2-normal.zip"; \
+    else \
+        wget "https://github.com/rebecca554owen/toys/releases/download/${VERSION}/openppp2-${ARCH_NORMAL}.zip" -O "/opt/openppp2-normal.zip"; \
+    fi && \
     # 如果存在io版本则下载
     if [ -n "$ARCH_IO" ]; then \
-        wget "https://github.com/rebecca554owen/toys/releases/download/${VERSION}/openppp2-${ARCH_IO}.zip" -O "/opt/openppp2-io.zip" || echo "io版本不存在，跳过下载"; \
+        if [ "$VERSION" = "latest" ]; then \
+            wget "https://github.com/rebecca554owen/toys/releases/latest/download/openppp2-${ARCH_IO}.zip" -O "/opt/openppp2-io.zip" || echo "io版本不存在，跳过下载"; \
+        else \
+            wget "https://github.com/rebecca554owen/toys/releases/download/${VERSION}/openppp2-${ARCH_IO}.zip" -O "/opt/openppp2-io.zip" || echo "io版本不存在，跳过下载"; \
+        fi; \
     fi
 
 # 解压并配置可执行文件
@@ -51,5 +59,17 @@ RUN unzip /opt/openppp2-normal.zip -d /opt/ && \
 
 ENV USE_IO=false
 
+# 创建入口脚本
+RUN echo '#!/bin/sh\n\
+echo "检查IO版本可用性..."\n\
+if [ -f /opt/io/ppp ] && [ "$USE_IO" = "true" ]; then\n\
+    echo "检测到IO版本且USE_IO=true，使用IO版本启动"\n\
+    exec /opt/io/ppp "$@"\n\
+else\n\
+    echo "使用标准版本启动"\n\
+    exec /opt/ppp "$@"\n\
+fi' > /entrypoint.sh && \
+    chmod +x /entrypoint.sh
+
 # 设置入口点
-ENTRYPOINT ["sh", "-c", "if [ \"$USE_IO\" = \"true\" ]; then /opt/io/ppp; else /opt/ppp; fi"]
+ENTRYPOINT ["/entrypoint.sh"]

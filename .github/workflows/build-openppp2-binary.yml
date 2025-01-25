@@ -6,7 +6,7 @@ on:
       tag_name:
         description: '输入发布的 tag 名称'
         required: true
-        default: 'v1.0.4'
+        default: 'v1.0.5'
 
 jobs:
   build:
