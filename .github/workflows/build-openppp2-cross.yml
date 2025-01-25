@@ -6,7 +6,7 @@ on:
       tag_name:
         description: '输入发布的 tag 名称'
         required: true
-        default: 'v0.0.4'
+        default: 'v0.0.5'
 
 jobs:
   build:
@@ -183,11 +183,13 @@ jobs:
           libkrb5-dev \
           libssl-dev \
           libunwind8 \
-          liburing-dev \
           net-tools \
           openssl \
           unzip \
           zip
+        if ${{ matrix.io_uring }}; then
+          sudo apt-get install -y liburing-dev
+        fi
 
     - name: Install cross compilers
       run: |

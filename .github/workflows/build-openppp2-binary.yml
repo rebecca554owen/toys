@@ -6,7 +6,7 @@ on:
       tag_name:
         description: '输入发布的 tag 名称'
         required: true
-        default: 'v1.0.4'
+        default: 'v1.0.5'
 
 jobs:
   build:
@@ -19,15 +19,15 @@ jobs:
         platform: 
           - linux/amd64
           - linux/aarch64
+        io_uring: [true, false]
         include:
-          - os: ubuntu-20.04
-            io_uring: false
-          - os: ubuntu-22.04
-            io_uring: true
           - platform: linux/amd64
             platform_name: linux-amd64
           - platform: linux/aarch64
             platform_name: linux-aarch64
+        exclude:
+          - os: ubuntu-20.04
+            io_uring: true
 
     runs-on: ${{ matrix.os }}
     env:
@@ -66,6 +66,12 @@ jobs:
       run: |
         cd openppp2
         sed -i 's|SET(THIRD_PARTY_LIBRARY_DIR /root/dev)|SET(THIRD_PARTY_LIBRARY_DIR $ENV{THIRD_PARTY_LIBRARY_DIR})|' CMakeLists.txt
+
+    - name: Enable IO_URING in CMakeLists.txt
+      if: ${{ matrix.io_uring }}
+      run: |
+        cd openppp2
+        sed -i 's|#add_definitions(-DBOOST_ASIO_HAS_IO_URING)|add_definitions(-DBOOST_ASIO_HAS_IO_URING)|' CMakeLists.txt
 
     - name: Install dependencies
       run: |
