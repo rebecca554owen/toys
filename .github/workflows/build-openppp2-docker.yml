@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Docker image tag,默认使用stable'
+        description: 'Docker image tag,默认使用test'
         required: false
-        default: 'stable'
+        default: 'test'
 
 env:
   REGISTRY_GHCR: ghcr.io

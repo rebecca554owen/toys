@@ -6,7 +6,7 @@ on:
       tag_name:
         description: '输入发布的 tag 名称'
         required: true
-        default: 'v1.0.5'
+        default: 'v1.0.6'
 
 jobs:
   build:
@@ -28,6 +28,8 @@ jobs:
         exclude:
           - os: ubuntu-20.04
             io_uring: true
+          - os: ubuntu-22.04
+            io_uring: false  # 22.04 只编译 io_uring 版本
 
     runs-on: ${{ matrix.os }}
     env:
