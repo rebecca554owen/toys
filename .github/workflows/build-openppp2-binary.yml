@@ -6,8 +6,10 @@ on:
       tag_name:
         description: '输入发布的 tag 名称'
         required: true
-        default: 'v1.0.6'
-
+        default: 'v1.0.0'
+  push:
+    tags:
+      - 'v1.*'
 jobs:
   build:
     strategy:
