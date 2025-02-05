@@ -1,12 +1,15 @@
-name: build-openppp2-cross  # 交叉编译
+name: build-openppp2-cross
 
 on:
   workflow_dispatch:
     inputs:
-      tag_name:
+      tag:
         description: '输入发布的 tag 名称'
         required: true
-        default: 'v0.0.6'
+        default: 'v0.0.0'
+  push:
+    tags:
+      - 'v0.*'
 
 jobs:
   build:
@@ -62,13 +65,32 @@ jobs:
         path: openppp2
         ref: main
 
-    - name: Validate ARTIFACT_NAME
+    - name: Get release tag
+      id: get-tag
+      shell: bash
       run: |
-        PLATFORM=${{ matrix.platform_name }}
-        if [[ -z "${PLATFORM}" ]]; then
-          echo "Error: PLATFORM is empty"
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+        else
+          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Validate inputs
+      run: |
+        # 验证tag格式
+        if [[ ! "${{ steps.get-tag.outputs.tag }}" =~ ^v0\.[0-9]+\.[0-9]+$ ]]; then
+          echo "错误：标签格式无效，应为v0.x.x"
           exit 1
         fi
+
+        # 验证平台参数
+        PLATFORM=${{ matrix.platform_name }}
+        if [[ -z "${PLATFORM}" ]]; then
+          echo "错误：平台参数为空"
+          exit 1
+        fi
+
+        # 生成制品名称
         if ${{ matrix.io_uring }}; then
           ARTIFACT_NAME=openppp2-${PLATFORM}-io-uring.zip
         else
@@ -82,163 +104,118 @@ jobs:
         repository: liulilittle/openppp2-ubuntu-3rd-environment
         path: 3rd
 
-    - name: Set THIRD_PARTY_LIBRARY_DIR environment variables
+    - name: Set THIRD_PARTY_LIBRARY_DIR
       run: |
         case ${{ matrix.platform }} in
-          linux/amd64)
-            echo "THIRD_PARTY_LIBRARY_DIR=${GITHUB_WORKSPACE}/3rd/amd64" >> $GITHUB_ENV
-            ;;
-          linux/aarch64)
-            echo "THIRD_PARTY_LIBRARY_DIR=${GITHUB_WORKSPACE}/3rd/aarch64" >> $GITHUB_ENV
-            ;;
-          linux/armv7l)
-            echo "THIRD_PARTY_LIBRARY_DIR=${GITHUB_WORKSPACE}/3rd/armv7l" >> $GITHUB_ENV
-            ;;
-          linux/ppc64el)
-            echo "THIRD_PARTY_LIBRARY_DIR=${GITHUB_WORKSPACE}/3rd/ppc64el" >> $GITHUB_ENV
-            ;;
-          linux/s390x)
-            echo "THIRD_PARTY_LIBRARY_DIR=${GITHUB_WORKSPACE}/3rd/s390x" >> $GITHUB_ENV
-            ;;
-          linux/riscv64)
-            echo "THIRD_PARTY_LIBRARY_DIR=${GITHUB_WORKSPACE}/3rd/riscv64" >> $GITHUB_ENV
-            ;;
-          linux/mipsel)
-            echo "THIRD_PARTY_LIBRARY_DIR=${GITHUB_WORKSPACE}/3rd/mipsel" >> $GITHUB_ENV
-            ;;
-          *)
-            echo "Unsupported platform: ${{ matrix.platform }}"
+          linux/amd64)    dir=amd64 ;;
+          linux/aarch64)  dir=aarch64 ;;
+          linux/armv7l)   dir=armv7l ;;
+          linux/ppc64el)  dir=ppc64el ;;
+          linux/s390x)    dir=s390x ;;
+          linux/riscv64)  dir=riscv64 ;;
+          linux/mipsel)   dir=mipsel ;;
+          *) 
+            echo "不支持的平台: ${{ matrix.platform }}"
             exit 1
             ;;
         esac
+        echo "THIRD_PARTY_LIBRARY_DIR=${GITHUB_WORKSPACE}/3rd/${dir}" >> $GITHUB_ENV
 
-    - name: Select compiler
-      run: |
-        case ${{ matrix.platform }} in
-          linux/amd64)
-            echo "PLATFORM_LD=ld" >> $GITHUB_ENV
-            echo "PLATFORM_CC=gcc" >> $GITHUB_ENV
-            echo "PLATFORM_CXX=g++" >> $GITHUB_ENV
-            ;;
-          linux/aarch64)
-            echo "PLATFORM_LD=aarch64-linux-gnu-ld" >> $GITHUB_ENV
-            echo "PLATFORM_CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-            echo "PLATFORM_CXX=aarch64-linux-gnu-g++" >> $GITHUB_ENV
-            ;;
-          linux/armv7l)
-            echo "PLATFORM_LD=arm-linux-gnueabihf-ld" >> $GITHUB_ENV
-            echo "PLATFORM_CC=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
-            echo "PLATFORM_CXX=arm-linux-gnueabihf-g++" >> $GITHUB_ENV
-            ;;
-          linux/ppc64el)
-            echo "PLATFORM_LD=powerpc64le-linux-gnu-ld" >> $GITHUB_ENV
-            echo "PLATFORM_CC=powerpc64le-linux-gnu-gcc" >> $GITHUB_ENV
-            echo "PLATFORM_CXX=powerpc64le-linux-gnu-g++" >> $GITHUB_ENV
-            ;;
-          linux/s390x)
-            echo "PLATFORM_LD=s390x-linux-gnu-ld" >> $GITHUB_ENV
-            echo "PLATFORM_CC=s390x-linux-gnu-gcc" >> $GITHUB_ENV
-            echo "PLATFORM_CXX=s390x-linux-gnu-g++" >> $GITHUB_ENV
-            ;;
-          linux/riscv64)
-            echo "PLATFORM_LD=riscv64-linux-gnu-ld" >> $GITHUB_ENV
-            echo "PLATFORM_CC=riscv64-linux-gnu-gcc" >> $GITHUB_ENV
-            echo "PLATFORM_CXX=riscv64-linux-gnu-g++" >> $GITHUB_ENV
-            ;;
-          linux/mipsel)
-            echo "PLATFORM_LD=mipsel-linux-gnu-ld" >> $GITHUB_ENV
-            echo "PLATFORM_CC=mipsel-linux-gnu-gcc" >> $GITHUB_ENV
-            echo "PLATFORM_CXX=mipsel-linux-gnu-g++" >> $GITHUB_ENV
-            ;;
-          *)
-            echo "Unsupported platform: ${{ matrix.platform }}"
-            exit 1
-            ;;
-        esac
-
-    - name: Replace THIRD_PARTY_LIBRARY_DIR in CMakeLists.txt
-      run: |
-        cd openppp2
-        sed -i 's|SET(THIRD_PARTY_LIBRARY_DIR /root/dev)|SET(THIRD_PARTY_LIBRARY_DIR $ENV{THIRD_PARTY_LIBRARY_DIR})|' CMakeLists.txt
-
-    - name: Enable IO_URING in CMakeLists.txt
-      if: ${{ matrix.io_uring }}
-      run: |
-        cd openppp2
-        sed -i 's|#add_definitions(-DBOOST_ASIO_HAS_IO_URING)|add_definitions(-DBOOST_ASIO_HAS_IO_URING)|' CMakeLists.txt
-
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          autoconf \
-          build-essential \
-          clang \
-          cmake \
-          curl \
-          gcc-multilib \
-          gdb \
-          git \
-          libicu-dev \
-          libkrb5-dev \
-          libssl-dev \
-          libunwind8 \
-          net-tools \
-          openssl \
-          unzip \
-          zip
-        if ${{ matrix.io_uring }}; then
-          sudo apt-get install -y liburing-dev
-        fi
-
-    - name: Install cross compilers
+    - name: Setup cross-compilation toolchain
       run: |
         case ${{ matrix.platform }} in
           linux/amd64)
             sudo apt-get install -y gcc g++
+            echo "CC=gcc" >> $GITHUB_ENV
+            echo "CXX=g++" >> $GITHUB_ENV
+            echo "LD=ld" >> $GITHUB_ENV
             ;;
           linux/aarch64)
             sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+            echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+            echo "CXX=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+            echo "LD=aarch64-linux-gnu-ld" >> $GITHUB_ENV
             ;;
           linux/armv7l)
             sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+            echo "CC=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
+            echo "CXX=arm-linux-gnueabihf-g++" >> $GITHUB_ENV
+            echo "LD=arm-linux-gnueabihf-ld" >> $GITHUB_ENV
             ;;
           linux/ppc64el)
             sudo apt-get install -y gcc-powerpc64le-linux-gnu g++-powerpc64le-linux-gnu
+            echo "CC=powerpc64le-linux-gnu-gcc" >> $GITHUB_ENV
+            echo "CXX=powerpc64le-linux-gnu-g++" >> $GITHUB_ENV
+            echo "LD=powerpc64le-linux-gnu-ld" >> $GITHUB_ENV
             ;;
           linux/s390x)
             sudo apt-get install -y gcc-s390x-linux-gnu g++-s390x-linux-gnu
+            echo "CC=s390x-linux-gnu-gcc" >> $GITHUB_ENV
+            echo "CXX=s390x-linux-gnu-g++" >> $GITHUB_ENV
+            echo "LD=s390x-linux-gnu-ld" >> $GITHUB_ENV
             ;;
           linux/riscv64)
             sudo apt-get install -y gcc-riscv64-linux-gnu g++-riscv64-linux-gnu
+            echo "CC=riscv64-linux-gnu-gcc" >> $GITHUB_ENV
+            echo "CXX=riscv64-linux-gnu-g++" >> $GITHUB_ENV
+            echo "LD=riscv64-linux-gnu-ld" >> $GITHUB_ENV
             ;;
           linux/mipsel)
             sudo apt-get install -y gcc-mipsel-linux-gnu g++-mipsel-linux-gnu
+            echo "CC=mipsel-linux-gnu-gcc" >> $GITHUB_ENV
+            echo "CXX=mipsel-linux-gnu-g++" >> $GITHUB_ENV
+            echo "LD=mipsel-linux-gnu-ld" >> $GITHUB_ENV
             ;;
           *)
-            echo "Unsupported platform: ${{ matrix.platform }}"
+            echo "不支持的平台: ${{ matrix.platform }}"
             exit 1
             ;;
         esac
 
-    - name: Build openppp2
+    - name: Configure build environment
       run: |
         cd openppp2
-        mkdir -p build
-        cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_C_COMPILER=${{ env.PLATFORM_CC }} \
-                -DCMAKE_CXX_COMPILER=${{ env.PLATFORM_CXX }} \
-                -DCMAKE_LINKER=${{ env.PLATFORM_LD }} \
-                -DBOOST_ASIO_HAS_IO_URING=${{ fromJSON(matrix.io_uring) && 1 || 0 }}
+        # 更新第三方库路径
+        sed -i "s|SET(THIRD_PARTY_LIBRARY_DIR /root/dev)|SET(THIRD_PARTY_LIBRARY_DIR ${{ env.THIRD_PARTY_LIBRARY_DIR }})|" CMakeLists.txt
+
+        # 条件启用IO_URING
+        if ${{ matrix.io_uring }}; then
+          sed -i 's|#add_definitions(-DBOOST_ASIO_HAS_IO_URING)|add_definitions(-DBOOST_ASIO_HAS_IO_URING)|' CMakeLists.txt
+        fi
+
+    - name: Install base dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          libicu-dev \
+          libssl-dev \
+          libunwind8 \
+          zlib1g-dev
+
+        if ${{ matrix.io_uring }}; then
+          sudo apt-get install -y liburing-dev
+        fi
+
+    - name: Build project
+      run: |
+        cd openppp2
+        mkdir -p build && cd build
+        cmake .. \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_C_COMPILER=${{ env.CC }} \
+          -DCMAKE_CXX_COMPILER=${{ env.CXX }} \
+          -DCMAKE_LINKER=${{ env.LD }} \
+          -DBOOST_ASIO_HAS_IO_URING=${{ matrix.io_uring && 'ON' || 'OFF' }}
         make -j $(nproc)
 
-    - name: Prepare artifact
+    - name: Package artifact
       run: |
         cd openppp2/bin
         zip -r ${{ env.ARTIFACT_NAME }} ppp
 
-    - name: Set build time
+    - name: Record build time
       run: |
         echo "BUILD_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
 
@@ -251,9 +228,9 @@ jobs:
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        files: ./openppp2/bin/*.zip
-        tag_name: ${{ github.event.inputs.tag_name }}
-        body: "Build time: ${{ env.BUILD_TIME }}"
-        prerelease: true  # 设置为预发布版本
+        files: openppp2/bin/*.zip
+        tag_name: ${{ steps.get-tag.outputs.tag }}
+        body: "Release: ${{ env.BUILD_TIME }}"
+        prerelease: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

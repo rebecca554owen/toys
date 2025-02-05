@@ -1,12 +1,15 @@
-name: build-openppp2-binary # 发布二进制文件
+name: build-openppp2-binary
 
 on:
   workflow_dispatch:
     inputs:
-      tag_name:
+      tag:
         description: '输入发布的 tag 名称'
         required: true
-        default: 'v1.0.6'
+        default: 'v1.0.0'
+  push:
+    tags:
+      - 'v1.*'
 
 jobs:
   build:
@@ -29,7 +32,7 @@ jobs:
           - os: ubuntu-20.04
             io_uring: true
           - os: ubuntu-22.04
-            io_uring: false  # 22.04 只编译 io_uring 版本
+            io_uring: false
 
     runs-on: ${{ matrix.os }}
     env:
@@ -46,13 +49,32 @@ jobs:
         path: openppp2
         ref: main
 
-    - name: Validate ARTIFACT_NAME
+    - name: Get release tag
+      id: get-tag
+      shell: bash
       run: |
-        PLATFORM=${{ matrix.platform_name }}
-        if [[ -z "${PLATFORM}" ]]; then
-          echo "Error: PLATFORM is empty"
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+        else
+          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Validate inputs
+      run: |
+        # 验证tag格式
+        if [[ ! "${{ steps.get-tag.outputs.tag }}" =~ ^v1\.[0-9]+\.[0-9]+$ ]]; then
+          echo "错误：标签格式无效，应为v1.x.x"
           exit 1
         fi
+
+        # 验证平台参数
+        PLATFORM=${{ matrix.platform_name }}
+        if [[ -z "${PLATFORM}" ]]; then
+          echo "错误：平台参数为空"
+          exit 1
+        fi
+
+        # 生成文件名
         if ${{ matrix.io_uring }}; then
           ARTIFACT_NAME=openppp2-${PLATFORM}-io-uring.zip
         else
@@ -142,11 +164,11 @@ jobs:
       run: |
         echo "BUILD_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
 
-    - name: Create GitHub Release with Build Time
+    - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
         files: ./openppp2/bin/*
-        tag_name: ${{ github.event.inputs.tag_name }}
-        body: "Build time: ${{ env.BUILD_TIME }}"
+        tag_name: ${{ steps.get-tag.outputs.tag }}
+        body: "Release: ${{ env.BUILD_TIME }}"
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
