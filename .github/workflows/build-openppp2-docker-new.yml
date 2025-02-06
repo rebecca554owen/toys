@@ -1,4 +1,4 @@
-name: build-openppp2-docker-test # 测试分支
+name: build-openppp2-docker-new # New 分支
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       version:
         description: '输入 openppp2 版本号,默认为最新版'
         required: false
-        default: 'v1.0.8'
+        default: 'v1.0.9'
 
 env:
   REGISTRY_GHCR: ghcr.io
@@ -61,6 +61,65 @@ jobs:
             echo "::error::Invalid Docker tag: $VERSION"
             echo "Docker tag must match regex: [a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}"
             exit 1
+          fi
+
+      - name: Download and prepare binaries
+        shell: bash
+        run: |
+          mkdir -p openppp/opt
+          cd openppp/opt
+
+          # 根据架构设置文件名
+          case "${{ matrix.platform_name }}" in
+            linux-amd64)
+              normal_suffix="linux-amd64"
+              io_suffix="linux-amd64-io-uring"
+              ;;
+            linux-arm64)
+              normal_suffix="linux-aarch64"
+              io_suffix="linux-aarch64-io-uring"
+              ;;
+            *)
+              echo "不支持的平台: ${{ matrix.platform_name }}"
+              exit 1
+              ;;
+          esac
+
+          VERSION=${{ steps.get_version.outputs.version }}
+
+          # 下载正常版本（强制要求存在）
+          if [ "$VERSION" = "latest" ]; then
+            wget "https://github.com/rebecca554owen/toys/releases/latest/download/openppp2-${normal_suffix}.zip" -O normal.zip
+          else
+            wget "https://github.com/rebecca554owen/toys/releases/download/${VERSION}/openppp2-${normal_suffix}.zip" -O normal.zip
+          fi
+
+          # 尝试下载io版本（可选）
+          if [ "$VERSION" = "latest" ]; then
+            wget "https://github.com/rebecca554owen/toys/releases/latest/download/openppp2-${io_suffix}.zip" -O io.zip || echo "::notice::跳过不存在的IO版本"
+          else
+            wget "https://github.com/rebecca554owen/toys/releases/download/${VERSION}/openppp2-${io_suffix}.zip" -O io.zip || echo "::notice::跳过不存在的IO版本"
+          fi
+
+          # 处理正常版本
+          if file normal.zip | grep -q "Zip archive data"; then
+            unzip normal.zip -d .
+            rm normal.zip
+          else
+            echo "::error::正常版本ZIP文件损坏或格式错误"
+            exit 1
+          fi
+
+          # 处理io版本（如果存在）
+          if [ -f io.zip ]; then
+            if file io.zip | grep -q "Zip archive data"; then
+              mkdir -p io
+              unzip io.zip -d io/
+              rm io.zip
+            else
+              echo "::warning::IO版本ZIP文件损坏，已忽略"
+              rm -f io.zip
+            fi
           fi
 
       - name: Build and push platform-specific images
