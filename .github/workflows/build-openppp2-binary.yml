@@ -1,0 +1,174 @@
+name: build-openppp2-binary
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '输入发布的 tag 名称'
+        required: true
+        default: 'v1.0.0'
+  push:
+    tags:
+      - 'v1.*'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: 
+          - ubuntu-20.04
+          - ubuntu-22.04
+        platform: 
+          - linux/amd64
+          - linux/aarch64
+        io_uring: [true, false]
+        include:
+          - platform: linux/amd64
+            platform_name: linux-amd64
+          - platform: linux/aarch64
+            platform_name: linux-aarch64
+        exclude:
+          - os: ubuntu-20.04
+            io_uring: true
+          - os: ubuntu-22.04
+            io_uring: false
+
+    runs-on: ${{ matrix.os }}
+    env:
+      ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+      BOOST_VERSION: 1.86.0
+      JEMALLOC_VERSION: 5.3.0
+      OPENSSL_VERSION: 3.4.0
+
+    steps:
+    - name: Checkout openppp2 repository
+      uses: actions/checkout@v4
+      with:
+        repository: liulilittle/openppp2
+        path: openppp2
+        ref: main
+
+    - name: Get release tag
+      id: get-tag
+      shell: bash
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+        else
+          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Validate inputs
+      run: |
+        # 验证tag格式
+        if [[ ! "${{ steps.get-tag.outputs.tag }}" =~ ^v1\.[0-9]+\.[0-9]+$ ]]; then
+          echo "错误：标签格式无效，应为v1.x.x"
+          exit 1
+        fi
+
+        # 验证平台参数
+        PLATFORM=${{ matrix.platform_name }}
+        if [[ -z "${PLATFORM}" ]]; then
+          echo "错误：平台参数为空"
+          exit 1
+        fi
+
+        # 生成文件名
+        if ${{ matrix.io_uring }}; then
+          ARTIFACT_NAME=openppp2-${PLATFORM}-io-uring.zip
+        else
+          ARTIFACT_NAME=openppp2-${PLATFORM}.zip
+        fi
+        echo "ARTIFACT_NAME=${ARTIFACT_NAME}" >> $GITHUB_ENV
+
+    - name: Set THIRD_PARTY_LIBRARY_DIR environment variables
+      run: |
+        echo "THIRD_PARTY_LIBRARY_DIR=$GITHUB_WORKSPACE" >> $GITHUB_ENV
+
+    - name: Replace THIRD_PARTY_LIBRARY_DIR in CMakeLists.txt
+      run: |
+        cd openppp2
+        sed -i 's|SET(THIRD_PARTY_LIBRARY_DIR /root/dev)|SET(THIRD_PARTY_LIBRARY_DIR $ENV{THIRD_PARTY_LIBRARY_DIR})|' CMakeLists.txt
+
+    - name: Enable IO_URING in CMakeLists.txt
+      if: ${{ matrix.io_uring }}
+      run: |
+        cd openppp2
+        sed -i 's|#add_definitions(-DBOOST_ASIO_HAS_IO_URING)|add_definitions(-DBOOST_ASIO_HAS_IO_URING)|' CMakeLists.txt
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          autoconf automake build-essential ca-certificates \
+          clang cmake curl g++ gcc gdb git libicu-dev \
+          libkrb5-dev libssl-dev libunwind8 net-tools \
+          openssl unzip zip
+        if ${{ matrix.io_uring }}; then
+          sudo apt-get install -y liburing-dev
+        fi
+
+    - name: Build boost
+      run: |
+        BOOST_VERSION_UNDERSCORE=$(echo ${{ env.BOOST_VERSION }} | sed 's/\./_/g')
+        wget https://archives.boost.io/release/${{ env.BOOST_VERSION }}/source/boost_${BOOST_VERSION_UNDERSCORE}.tar.bz2
+        tar jxvf boost*.tar.bz2
+        rm -rf boost*.tar.bz2
+        mv boost* boost
+        cd boost
+        ./bootstrap.sh
+        ./b2 cxxflags=-fPIC
+
+    - name: Build jemalloc
+      run: |
+        wget https://github.com/jemalloc/jemalloc/releases/download/${{ env.JEMALLOC_VERSION }}/jemalloc-${{ env.JEMALLOC_VERSION }}.tar.bz2
+        tar jxvf jemalloc*.tar.bz2
+        rm -rf jemalloc*.tar.bz2
+        mv jemalloc* jemalloc
+        cd jemalloc
+        ./autogen.sh --with-jemalloc-prefix=je_
+        make -j $(nproc)
+
+    - name: Build openssl
+      run: |
+        wget https://github.com/openssl/openssl/releases/download/openssl-${{ env.OPENSSL_VERSION }}/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
+        tar zxvf openssl*.tar.gz
+        rm -rf openssl*.tar.gz
+        mv openssl* openssl
+        cd openssl
+        ./Configure
+        make -j $(nproc)
+
+    - name: Build openppp2
+      run: |
+        cd openppp2
+        mkdir -p build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release \
+                -DBOOST_ASIO_HAS_IO_URING=${{ fromJSON(matrix.io_uring) && 1 || 0 }}
+        make -j $(nproc)
+
+    - name: Zip and list the built files
+      run: |
+        cd openppp2/bin
+        zip -r ${{ env.ARTIFACT_NAME }} ppp
+
+    - name: Archive openppp2
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.ARTIFACT_NAME }}
+        path: openppp2/bin/${{ env.ARTIFACT_NAME }}
+
+    - name: Set build time
+      run: |
+        echo "BUILD_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ./openppp2/bin/*
+        tag_name: ${{ steps.get-tag.outputs.tag }}
+        body: "Release: ${{ env.BUILD_TIME }}"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
