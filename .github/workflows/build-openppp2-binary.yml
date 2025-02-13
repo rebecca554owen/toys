@@ -94,6 +94,31 @@ jobs:
         cd openppp2
         sed -i 's|#add_definitions(-DBOOST_ASIO_HAS_IO_URING)|add_definitions(-DBOOST_ASIO_HAS_IO_URING)|' CMakeLists.txt
 
+    - name: Cache Boost
+      id: cache-boost
+      uses: actions/cache@v4
+      with:
+        path: |
+          boost
+          boost_${{ env.BOOST_VERSION }}.tar.bz2
+        key: ${{ runner.os }}-boost-${{ env.BOOST_VERSION }}-${{ hashFiles('CMakeLists.txt') }}
+
+    - name: Cache Jemalloc
+      uses: actions/cache@v4
+      with:
+        path: |
+          jemalloc
+          jemalloc-${{ env.JEMALLOC_VERSION }}.tar.bz2
+        key: ${{ runner.os }}-jemalloc-${{ env.JEMALLOC_VERSION }}-${{ matrix.os }}-${{ matrix.platform }}-${{ matrix.io_uring }}
+
+    - name: Cache OpenSSL
+      uses: actions/cache@v4
+      with:
+        path: |
+          openssl
+          openssl-${{ env.OPENSSL_VERSION }}.tar.gz
+        key: ${{ runner.os }}-openssl-${{ env.OPENSSL_VERSION }}-${{ matrix.os }}-${{ matrix.platform }}-${{ matrix.io_uring }}
+
     - name: Install dependencies
       run: |
         sudo apt-get update
@@ -114,8 +139,11 @@ jobs:
         if ${{ matrix.io_uring }}; then
           sudo apt-get install -y liburing-dev
         fi
+      env:
+        CCACHE_DIR: ${{ github.workspace }}/.ccache
 
     - name: Build boost
+      if: steps.cache-boost.outputs.cache-hit != 'true'
       run: |
         BOOST_VERSION_UNDERSCORE=$(echo ${{ env.BOOST_VERSION }} | sed 's/\./_/g')
         wget https://archives.boost.io/release/${{ env.BOOST_VERSION }}/source/boost_${BOOST_VERSION_UNDERSCORE}.tar.bz2
@@ -127,6 +155,7 @@ jobs:
         ./b2 cxxflags=-fPIC
 
     - name: Build jemalloc
+      if: steps.cache-jemalloc.outputs.cache-hit != 'true'
       run: |
         wget https://github.com/jemalloc/jemalloc/releases/download/${{ env.JEMALLOC_VERSION }}/jemalloc-${{ env.JEMALLOC_VERSION }}.tar.bz2
         tar jxvf jemalloc*.tar.bz2
@@ -137,6 +166,7 @@ jobs:
         make -j $(nproc)
 
     - name: Build openssl
+      if: steps.cache-openssl.outputs.cache-hit != 'true'
       run: |
         wget https://github.com/openssl/openssl/releases/download/openssl-${{ env.OPENSSL_VERSION }}/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
         tar zxvf openssl*.tar.gz

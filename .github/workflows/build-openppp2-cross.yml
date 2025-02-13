@@ -58,6 +58,12 @@ jobs:
       ACTIONS_ALLOW_UNSECURE_COMMANDS: true
 
     steps:
+    - name: Cache 3rd party libraries
+      uses: actions/cache@v4
+      with:
+        path: 3rd
+        key: ${{ runner.os }}-3rd-libs-${{ matrix.platform }}
+
     - name: Checkout openppp2
       uses: actions/checkout@v4
       with:
