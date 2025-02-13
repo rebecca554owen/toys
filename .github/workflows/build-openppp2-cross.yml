@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '输入发布的 tag 名称'
+        description: '输入 openppp2 的 tag 名称'
         required: true
         default: 'v0.1.2'
   push:
@@ -65,7 +65,7 @@ jobs:
         path: openppp2
         ref: main
 
-    - name: Get release tag
+    - name: Get openppp2 tag
       id: get-tag
       shell: bash
       run: |
@@ -75,7 +75,7 @@ jobs:
           echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
         fi
 
-    - name: Validate inputs
+    - name: Validate openppp2 tag
       run: |
         # 验证tag格式
         if [[ ! "${{ steps.get-tag.outputs.tag }}" =~ ^v0\.[0-9]+\.[0-9]+$ ]]; then
@@ -101,6 +101,7 @@ jobs:
       with:
         repository: liulilittle/openppp2-ubuntu-3rd-environment
         path: 3rd
+        fetch-depth: 1
 
     - name: Set THIRD_PARTY_LIBRARY_DIR
       run: |
@@ -203,7 +204,7 @@ jobs:
           sudo apt-get install -y liburing-dev
         fi
 
-    - name: Build project
+    - name: Build openppp2
       run: |
         cd openppp2
         mkdir -p build && cd build
@@ -215,20 +216,20 @@ jobs:
           -DBOOST_ASIO_HAS_IO_URING=${{ matrix.io_uring && 'ON' || 'OFF' }}
         make -j $(nproc)
 
-    - name: Package artifact
+    - name: Package openppp2
       run: |
         cd openppp2/bin
         zip -r ${{ env.ARTIFACT_NAME }} ppp
 
-    - name: Record build time
-      run: |
-        echo "BUILD_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
-
-    - name: Upload artifact
+    - name: Upload openppp2
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.ARTIFACT_NAME }}
         path: openppp2/bin/${{ env.ARTIFACT_NAME }}
+
+    - name: Record build time
+      run: |
+        echo "BUILD_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
