@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入发布的 tag 名称'
         required: true
-        default: 'v1.0.0'
+        default: 'v1.1.2'
   push:
     tags:
       - 'v1.*'
@@ -61,20 +61,17 @@ jobs:
 
     - name: Validate inputs
       run: |
-        # 验证tag格式
         if [[ ! "${{ steps.get-tag.outputs.tag }}" =~ ^v1\.[0-9]+\.[0-9]+$ ]]; then
           echo "错误：标签格式无效，应为v1.x.x"
           exit 1
         fi
 
-        # 验证平台参数
         PLATFORM=${{ matrix.platform_name }}
         if [[ -z "${PLATFORM}" ]]; then
           echo "错误：平台参数为空"
           exit 1
         fi
 
-        # 生成文件名
         if ${{ matrix.io_uring }}; then
           ARTIFACT_NAME=openppp2-${PLATFORM}-io-uring.zip
         else
@@ -101,10 +98,19 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          autoconf automake build-essential ca-certificates \
-          clang cmake curl g++ gcc gdb git libicu-dev \
-          libkrb5-dev libssl-dev libunwind8 net-tools \
-          openssl unzip zip
+          build-essential \
+          cmake \
+          gcc \
+          g++ \
+          libicu-dev \
+          libssl-dev \
+          libunwind8 \
+          zlib1g-dev \
+          autoconf \
+          automake \
+          libtool \
+          pkg-config
+        
         if ${{ matrix.io_uring }}; then
           sudo apt-get install -y liburing-dev
         fi

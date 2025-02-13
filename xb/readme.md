@@ -15,16 +15,30 @@
       - ./Commands/sendDailyReport.php:/www/app/Console/Commands/sendDailyReport.php # dailyAt('8:30') 每天8:30报送昨日财报。
 
 ```
-## 2.aapanel + docker 全挂载的，直接把文件放到相应的位置即可，/www 为站点目录。
+## 2.aapanel + docker 全挂载部署说明
+### 文件目录结构
 ```
-/www/app/Console/Kernel.php
-/www/app/Console/Commands/* 
+/www
+├── app/
+│   └── Console/
+│       ├── Kernel.php                # 核心调度文件（需覆盖以激活插件命令）
+│       └── Commands/
+│           ├── updateExpiredUsers.php            # 用户订阅状态维护（5分钟周期）
+│           ├── getServerTodayRealTimeRank.php    # 实时流量排行统计（每小时） 
+│           ├── getTopUsers.php                   # 用户流量排行统计（每小时）
+│           ├── getServerYesterdayRank.php        # 昨日流量排行统计（每日8:00）
+│           └── sendDailyReport.php               # 运营报表生成（每日8:30）
 ```
 
-## 3.手动执行测试命令是否生效  
+## 3.手动执行测试命令是否生效
 
-`docker compose run -it --rm xboard php artisan xboard:updateExpiredUsers`
-`docker compose run -it --rm xboard php artisan xboard:getServerTodayRealTimeRank`
-`docker compose run -it --rm xboard php artisan xboard:getTopUsers`
-`docker compose run -it --rm xboard php artisan xboard:getServerYesterdayRank`
-`docker compose run -it --rm xboard php artisan xboard:sendDailyReport`
+### 用户订阅状态相关
+`docker compose run -it --rm xboard php artisan xboard:updateExpiredUsers`  # 手动执行用户订阅状态更新（每5分钟）
+
+### 实时数据统计
+`docker compose run -it --rm xboard php artisan xboard:getServerTodayRealTimeRank`  # 获取当日服务器实时流量排行（每小时）
+`docker compose run -it --rm xboard php artisan xboard:getTopUsers`                 # 获取用户流量使用排行（每小时）
+
+### 每日定时任务
+`docker compose run -it --rm xboard php artisan xboard:getServerYesterdayRank`  # 获取昨日服务器流量排行（每日8:00）
+`docker compose run -it --rm xboard php artisan xboard:sendDailyReport`         # 发送每日运营报表（每日8:30）

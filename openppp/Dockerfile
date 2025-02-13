@@ -16,7 +16,7 @@ RUN git clone --depth=1 https://github.com/liulilittle/openppp2.git $THIRD_PARTY
     cd $THIRD_PARTY_LIBRARY_DIR/openppp2 && \
     mkdir build && cd build && \
     cmake .. -DCMAKE_BUILD_TYPE=Release && \
-    make
+    make -j$(nproc)
 
 # 准备最终镜像
 FROM ubuntu:latest

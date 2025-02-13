@@ -1,4 +1,4 @@
-name: build-openppp2-docker-new # New 分支
+name: build-openppp2-docker-new # push docker image
 
 on:
   workflow_dispatch:

@@ -1,0 +1,16 @@
+services:
+  openppp2:
+    image: ghcr.io/rebecca554owen/openppp2:v1.1.1
+    container_name: openppp2
+    restart: always
+    privileged: true  # USE_IO=true 需要添加特权模式
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./appsettings.json:/opt/appsettings.json
+    network_mode: host
+    environment:
+    - USE_IO=true
+    command: ppp --mode=client --tun-host=no --tun-flash=yes --tun-ssmt=4/mq --tun-mux=8

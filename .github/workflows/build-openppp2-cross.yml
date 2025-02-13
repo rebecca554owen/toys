@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入发布的 tag 名称'
         required: true
-        default: 'v0.0.0'
+        default: 'v0.1.2'
   push:
     tags:
       - 'v0.*'
@@ -83,14 +83,12 @@ jobs:
           exit 1
         fi
 
-        # 验证平台参数
         PLATFORM=${{ matrix.platform_name }}
         if [[ -z "${PLATFORM}" ]]; then
           echo "错误：平台参数为空"
           exit 1
         fi
 
-        # 生成制品名称
         if ${{ matrix.io_uring }}; then
           ARTIFACT_NAME=openppp2-${PLATFORM}-io-uring.zip
         else
@@ -130,42 +128,49 @@ jobs:
             echo "CXX=g++" >> $GITHUB_ENV
             echo "LD=ld" >> $GITHUB_ENV
             ;;
+
           linux/aarch64)
             sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
             echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
             echo "CXX=aarch64-linux-gnu-g++" >> $GITHUB_ENV
             echo "LD=aarch64-linux-gnu-ld" >> $GITHUB_ENV
             ;;
+
           linux/armv7l)
             sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
             echo "CC=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
             echo "CXX=arm-linux-gnueabihf-g++" >> $GITHUB_ENV
             echo "LD=arm-linux-gnueabihf-ld" >> $GITHUB_ENV
             ;;
+
           linux/ppc64el)
             sudo apt-get install -y gcc-powerpc64le-linux-gnu g++-powerpc64le-linux-gnu
             echo "CC=powerpc64le-linux-gnu-gcc" >> $GITHUB_ENV
             echo "CXX=powerpc64le-linux-gnu-g++" >> $GITHUB_ENV
             echo "LD=powerpc64le-linux-gnu-ld" >> $GITHUB_ENV
             ;;
+
           linux/s390x)
             sudo apt-get install -y gcc-s390x-linux-gnu g++-s390x-linux-gnu
             echo "CC=s390x-linux-gnu-gcc" >> $GITHUB_ENV
             echo "CXX=s390x-linux-gnu-g++" >> $GITHUB_ENV
             echo "LD=s390x-linux-gnu-ld" >> $GITHUB_ENV
             ;;
+
           linux/riscv64)
             sudo apt-get install -y gcc-riscv64-linux-gnu g++-riscv64-linux-gnu
             echo "CC=riscv64-linux-gnu-gcc" >> $GITHUB_ENV
             echo "CXX=riscv64-linux-gnu-g++" >> $GITHUB_ENV
             echo "LD=riscv64-linux-gnu-ld" >> $GITHUB_ENV
             ;;
+
           linux/mipsel)
             sudo apt-get install -y gcc-mipsel-linux-gnu g++-mipsel-linux-gnu
             echo "CC=mipsel-linux-gnu-gcc" >> $GITHUB_ENV
             echo "CXX=mipsel-linux-gnu-g++" >> $GITHUB_ENV
             echo "LD=mipsel-linux-gnu-ld" >> $GITHUB_ENV
             ;;
+
           *)
             echo "不支持的平台: ${{ matrix.platform }}"
             exit 1
