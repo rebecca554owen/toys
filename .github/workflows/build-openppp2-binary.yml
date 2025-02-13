@@ -17,7 +17,6 @@ jobs:
       fail-fast: false
       matrix:
         os: 
-          - ubuntu-20.04
           - ubuntu-22.04
         platform: 
           - linux/amd64
@@ -28,11 +27,7 @@ jobs:
             platform_name: linux-amd64
           - platform: linux/aarch64
             platform_name: linux-aarch64
-        exclude:
-          - os: ubuntu-20.04
-            io_uring: true
-          - os: ubuntu-22.04
-            io_uring: false
+        exclude: []
 
     runs-on: ${{ matrix.os }}
     env:
@@ -94,6 +89,27 @@ jobs:
         cd openppp2
         sed -i 's|#add_definitions(-DBOOST_ASIO_HAS_IO_URING)|add_definitions(-DBOOST_ASIO_HAS_IO_URING)|' CMakeLists.txt
 
+    - name: Cache Boost
+      id: cache-boost
+      uses: actions/cache@v4
+      with:
+        path: boost
+        key: ${{ runner.os }}-boost-${{ env.BOOST_VERSION }}-${{ hashFiles('CMakeLists.txt') }}
+
+    - name: Cache Jemalloc
+      id: cache-jemalloc
+      uses: actions/cache@v4
+      with:
+        path: jemalloc
+        key: ${{ runner.os }}-jemalloc-${{ env.JEMALLOC_VERSION }}-${{ matrix.os }}-${{ matrix.platform }}-${{ matrix.io_uring }}
+
+    - name: Cache OpenSSL
+      id: cache-openssl
+      uses: actions/cache@v4
+      with:
+        path: openssl
+        key: ${{ runner.os }}-openssl-${{ env.OPENSSL_VERSION }}-${{ matrix.os }}-${{ matrix.platform }}-${{ matrix.io_uring }}
+
     - name: Install dependencies
       run: |
         sudo apt-get update
@@ -116,6 +132,7 @@ jobs:
         fi
 
     - name: Build boost
+      if: steps.cache-boost.outputs.cache-hit != 'true'
       run: |
         BOOST_VERSION_UNDERSCORE=$(echo ${{ env.BOOST_VERSION }} | sed 's/\./_/g')
         wget https://archives.boost.io/release/${{ env.BOOST_VERSION }}/source/boost_${BOOST_VERSION_UNDERSCORE}.tar.bz2
@@ -127,16 +144,18 @@ jobs:
         ./b2 cxxflags=-fPIC
 
     - name: Build jemalloc
+      if: steps.cache-jemalloc.outputs.cache-hit != 'true'
       run: |
         wget https://github.com/jemalloc/jemalloc/releases/download/${{ env.JEMALLOC_VERSION }}/jemalloc-${{ env.JEMALLOC_VERSION }}.tar.bz2
         tar jxvf jemalloc*.tar.bz2
         rm -rf jemalloc*.tar.bz2
-        mv jemalloc* jemalloc
+        mv jemalloc-* jemalloc
         cd jemalloc
         ./autogen.sh --with-jemalloc-prefix=je_
         make -j $(nproc)
 
     - name: Build openssl
+      if: steps.cache-openssl.outputs.cache-hit != 'true'
       run: |
         wget https://github.com/openssl/openssl/releases/download/openssl-${{ env.OPENSSL_VERSION }}/openssl-${{ env.OPENSSL_VERSION }}.tar.gz
         tar zxvf openssl*.tar.gz
