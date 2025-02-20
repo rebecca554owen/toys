@@ -1,0 +1,7 @@
+services:
+  miaospeed-koipy:
+    image: airportr/miaospeed:latest
+    container_name: miaospeed-koipy
+    restart: always
+    command: server -bind [::]:8766 -mtls -connthread 64 -token fulltclash -ipv6
+    network_mode: host

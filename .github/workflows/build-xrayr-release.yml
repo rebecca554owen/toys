@@ -1,0 +1,124 @@
+name: Build XrayR and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '输入 XrayR 的 tag 名称'
+        required: true
+        default: 'v0.9.5'
+  push:
+    tags:
+      - 'v0.*'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        goos: [linux]
+        goarch: [amd64, arm64]
+        include:
+          - goos: linux
+            goarch: amd64
+            platform_name: linux-amd64
+          - goos: linux
+            goarch: arm64
+            platform_name: linux-arm64
+        exclude: []
+      fail-fast: false
+
+    runs-on: ubuntu-latest
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      GOARM: ${{ matrix.goarm }}
+      CGO_ENABLED: 0
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: oQUoWuhf/XrayR
+          path: XrayR
+          ref: master
+
+      - name: Checkout Xray-core
+        uses: actions/checkout@v4
+        with:
+          repository: oQUoWuhf/Xray-core
+          path: Xray-core
+          ref: v1.8.20-fix-sniff
+
+      - name: Get XrayR tag
+        id: get-tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Validate tag format
+        run: |
+          if [[ ! "${{ steps.get-tag.outputs.tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "错误：标签格式无效，应为vX.Y.Z"
+            exit 1
+          fi
+
+          PLATFORM=${{ matrix.platform_name }}
+          if [[ -z "${PLATFORM}" ]]; then
+            echo "错误：平台参数为空"
+            exit 1
+          fi
+
+          echo "ARTIFACT_NAME=XrayR-${PLATFORM}.zip" >> $GITHUB_ENV
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ^1.21
+
+      - name: Get project dependencies
+        working-directory: ./XrayR
+        run: |
+          ls
+          go mod download
+
+      - name: Build XrayR
+        working-directory: ./XrayR
+        run: |
+          mkdir -p build_assets
+          go build -v -o build_assets/XrayR -trimpath -ldflags "-s -w -buildid="
+
+      - name: Prepare geo assets
+        working-directory: ./XrayR
+        run: |
+          mkdir -p build_assets
+          curl -L https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip.dat -o build_assets/geoip.dat
+          curl -L https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite.dat -o build_assets/geosite.dat
+
+      - name: Create ZIP archive
+        working-directory: ./XrayR
+        shell: bash
+        run: |
+          zip -r ${{ env.ARTIFACT_NAME }} build_assets
+
+      - name: Upload files to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ./XrayR/${{ env.ARTIFACT_NAME }}
+
+      - name: Record build time
+        run: |
+          echo "BUILD_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+          
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./XrayR/${{ env.ARTIFACT_NAME }}
+          tag_name: ${{ steps.get-tag.outputs.tag }}
+          body: "Build time: ${{ env.BUILD_TIME }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
