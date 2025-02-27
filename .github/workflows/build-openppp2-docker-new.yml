@@ -3,18 +3,18 @@ name: build-openppp2-docker-new # push docker image
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: '输入 openppp2 版本号,默认为最新版'
-        required: false
-        default: 'v1.1.2'
+      tag:
+        description: '输入 openppp2 版本标签,默认为最新版'
+        required: true
+        default: 'v1.3.0'
 
 env:
-  REGISTRY_GHCR: ghcr.io
+  REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/openppp2
 
 jobs:
-  build-and-push:
-    runs-on: ubuntu-24.04
+  build:
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
@@ -40,25 +40,24 @@ jobs:
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY_GHCR }}
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get version
-        id: get_version
+      - name: Get tag
+        id: get_tag
         run: |
-          if [ -z "${{ github.event.inputs.version }}" ]; then
-            VERSION="v1.0.0"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
           else
-            VERSION=${{ github.event.inputs.version }}
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Validate Docker tag
         run: |
-          VERSION=${{ steps.get_version.outputs.version }}
-          if ! echo "$VERSION" | grep -qE '^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$'; then
-            echo "::error::Invalid Docker tag: $VERSION"
+          TAG=${{ steps.get_tag.outputs.tag }}
+          if ! echo "$TAG" | grep -qE '^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$'; then
+            echo "::error::Invalid Docker tag: $TAG"
             echo "Docker tag must match regex: [a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}"
             exit 1
           fi
@@ -85,20 +84,20 @@ jobs:
               ;;
           esac
 
-          VERSION=${{ steps.get_version.outputs.version }}
+          TAG=${{ steps.get_tag.outputs.tag }}
 
           # 下载正常版本（强制要求存在）
-          if [ "$VERSION" = "latest" ]; then
+          if [ "$TAG" = "latest" ]; then
             wget "https://github.com/rebecca554owen/toys/releases/latest/download/openppp2-${normal_suffix}.zip" -O normal.zip
           else
-            wget "https://github.com/rebecca554owen/toys/releases/download/${VERSION}/openppp2-${normal_suffix}.zip" -O normal.zip
+            wget "https://github.com/rebecca554owen/toys/releases/download/${TAG}/openppp2-${normal_suffix}.zip" -O normal.zip
           fi
 
           # 尝试下载io版本（可选）
-          if [ "$VERSION" = "latest" ]; then
+          if [ "$TAG" = "latest" ]; then
             wget "https://github.com/rebecca554owen/toys/releases/latest/download/openppp2-${io_suffix}.zip" -O io.zip || echo "::notice::跳过不存在的IO版本"
           else
-            wget "https://github.com/rebecca554owen/toys/releases/download/${VERSION}/openppp2-${io_suffix}.zip" -O io.zip || echo "::notice::跳过不存在的IO版本"
+            wget "https://github.com/rebecca554owen/toys/releases/download/${TAG}/openppp2-${io_suffix}.zip" -O io.zip || echo "::notice::跳过不存在的IO版本"
           fi
 
           # 处理正常版本
@@ -132,19 +131,14 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: |
-            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.get_version.outputs.version }}
-          build-args: |
-            VERSION=${{ steps.get_version.outputs.version }}
-          provenance: false
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.get_tag.outputs.tag }}
 
       - name: Save digest
         shell: bash
         run: |
           mkdir -p /tmp/digests
-          DIGEST=$(docker buildx imagetools inspect ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.get_version.outputs.version }} --format '{{json .Manifest.Digest}}')
+          DIGEST=$(docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.get_tag.outputs.tag }} --format '{{json .Manifest.Digest}}')
           echo $DIGEST > /tmp/digests/${{ matrix.platform_name }}
-        env:
-          DOCKER_CLI_EXPERIMENTAL: enabled
 
       - name: Upload digests
         uses: actions/upload-artifact@v4
@@ -154,8 +148,8 @@ jobs:
           retention-days: 1
 
   merge:
-    runs-on: ubuntu-24.04
-    needs: build-and-push
+    runs-on: ubuntu-22.04
+    needs: build
     steps:
       - name: Download digests
         uses: actions/download-artifact@v4
@@ -172,15 +166,15 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ github.event.inputs.version }}
+            type=raw,value=${{ github.event.inputs.tag }}
             type=raw,value=latest
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY_GHCR }}
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -193,9 +187,9 @@ jobs:
           DIGEST_ARM64=$(cat linux-arm64 | tr -d '"')
 
           docker buildx imagetools create $DOCKER_TAGS \
-            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}@$DIGEST_AMD64 \
-            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}@$DIGEST_ARM64
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@$DIGEST_AMD64 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@$DIGEST_ARM64
       
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.inputs.tag }}

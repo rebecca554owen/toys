@@ -1,16 +1,16 @@
 services:
   openppp2:
-    image: ghcr.io/rebecca554owen/openppp2:v1.1.1
-    container_name: openppp2
-    restart: always
+    image: ghcr.io/rebecca554owen/openppp2:v1.1.1  # 使用的 Docker 镜像
+    container_name: openppp2  # 容器名称
+    restart: always  # 容器退出时自动重启
     privileged: true  # USE_IO=true 需要添加特权模式
     cap_add:
-      - NET_ADMIN
+      - NET_ADMIN  # 添加网络管理权限
     devices:
-      - /dev/net/tun:/dev/net/tun
+      - /dev/net/tun:/dev/net/tun  # 挂载 TUN 设备
     volumes:
-      - ./appsettings.json:/opt/appsettings.json
-    network_mode: host
+      - ./appsettings.json:/opt/appsettings.json  # 挂载配置文件
+    network_mode: host  # 使用主机网络模式
     environment:
-    - USE_IO=true
-    command: ppp --mode=client --tun-host=no --tun-flash=yes --tun-ssmt=4/mq --tun-mux=8
+    - USE_IO=true  # 启用 IO 操作
+    command: ppp --mode=client --tun-host=no --tun-flash=yes --tun-ssmt=4/mq --tun-mux=8  # 启动命令

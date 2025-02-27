@@ -6,10 +6,7 @@ on:
       tag:
         description: '输入 openppp2 的 tag 名称'
         required: true
-        default: 'v1.1.2'
-  push:
-    tags:
-      - 'v1.*'
+        default: 'v1.3.0'
 
 jobs:
   build:
@@ -87,46 +84,41 @@ jobs:
       if: ${{ matrix.io_uring }}
       run: |
         cd openppp2
-        sed -i 's|#add_definitions(-DBOOST_ASIO_HAS_IO_URING)|add_definitions(-DBOOST_ASIO_HAS_IO_URING)|' CMakeLists.txt
+        sed -i 's|# IF(PLATFORM_SYSTEM_LINUX)|IF(PLATFORM_SYSTEM_LINUX)|' CMakeLists.txt
+        sed -i 's|# *ADD_DEFINITIONS(-DBOOST_ASIO_HAS_IO_URING=1)|    ADD_DEFINITIONS(-DBOOST_ASIO_HAS_IO_URING=1)|' CMakeLists.txt
+        sed -i 's|# *ADD_DEFINITIONS(-DBOOST_ASIO_DISABLE_EPOLL=1)|    ADD_DEFINITIONS(-DBOOST_ASIO_DISABLE_EPOLL=1)|' CMakeLists.txt
+        sed -i 's|# ENDIF()|ENDIF()|' CMakeLists.txt
+        sed -i 's|# *liburing.a|liburing.a|g' CMakeLists.txt
+        # 验证修改结果
+        cat CMakeLists.txt
 
     - name: Cache Boost
       id: cache-boost
       uses: actions/cache@v4
       with:
         path: boost
-        key: ${{ runner.os }}-boost-${{ env.BOOST_VERSION }}-${{ hashFiles('CMakeLists.txt') }}
+        key: ${{ matrix.platform }}-${{ matrix.os }}-boost-${{ env.BOOST_VERSION }}
 
     - name: Cache Jemalloc
       id: cache-jemalloc
       uses: actions/cache@v4
       with:
         path: jemalloc
-        key: ${{ runner.os }}-jemalloc-${{ env.JEMALLOC_VERSION }}-${{ matrix.os }}-${{ matrix.platform }}-${{ matrix.io_uring }}
+        key: ${{ matrix.platform }}-${{ matrix.os }}-jemalloc-${{ env.JEMALLOC_VERSION }}
 
     - name: Cache OpenSSL
       id: cache-openssl
       uses: actions/cache@v4
       with:
         path: openssl
-        key: ${{ runner.os }}-openssl-${{ env.OPENSSL_VERSION }}-${{ matrix.os }}-${{ matrix.platform }}-${{ matrix.io_uring }}
+        key: ${{ matrix.platform }}-${{ matrix.os }}-openssl-${{ env.OPENSSL_VERSION }}
 
     - name: Install dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y \
           build-essential \
-          cmake \
-          gcc \
-          g++ \
-          libicu-dev \
-          libssl-dev \
-          libunwind8 \
-          zlib1g-dev \
-          autoconf \
-          automake \
-          libtool \
-          pkg-config
-        
+          cmake
         if ${{ matrix.io_uring }}; then
           sudo apt-get install -y liburing-dev
         fi
@@ -171,7 +163,7 @@ jobs:
         mkdir -p build
         cd build
         cmake .. -DCMAKE_BUILD_TYPE=Release \
-                -DBOOST_ASIO_HAS_IO_URING=${{ fromJSON(matrix.io_uring) && 1 || 0 }}
+                -DPLATFORM_SYSTEM_LINUX=ON
         make -j $(nproc)
 
     - name: Package openppp2
@@ -192,7 +184,7 @@ jobs:
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        files: ./openppp2/bin/*
+        files: ./openppp2/bin/*.zip
         tag_name: ${{ steps.get-tag.outputs.tag }}
         body: "Release: ${{ env.BUILD_TIME }}"
       env:
