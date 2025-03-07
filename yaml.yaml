@@ -6,20 +6,6 @@ proxies:
     username: admin
     password: password
 
-  - name: HK-hksv1
-    type: socks5
-    server: 127.0.0.1
-    port: 1081
-    username: admin
-    password: password
-
-  - name: HK-hksv2
-    type: socks5
-    server: 127.0.0.1
-    port: 1083
-    username: admin
-    password: password
-
   - name: HK-vkvm
     type: socks5
     server: 127.0.0.1
