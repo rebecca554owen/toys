@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入 openppp2 的 tag 名称'
         required: true
-        default: 'v1.1.3'
+        default: 'v1.1.5'
   push:
     tags:
       - 'v1.*'
@@ -94,21 +94,21 @@ jobs:
       uses: actions/cache@v4
       with:
         path: boost
-        key: ${{ runner.os }}-boost-${{ env.BOOST_VERSION }}-${{ hashFiles('CMakeLists.txt') }}
+        key: boost-${{ env.BOOST_VERSION }}-${{ hashFiles('openppp2/CMakeLists.txt') }}
 
     - name: Cache Jemalloc
       id: cache-jemalloc
       uses: actions/cache@v4
       with:
         path: jemalloc
-        key: ${{ runner.os }}-jemalloc-${{ env.JEMALLOC_VERSION }}-${{ matrix.os }}-${{ matrix.platform }}-${{ matrix.io_uring }}
+        key: jemalloc-${{ env.JEMALLOC_VERSION }}-${{ matrix.os }}-${{ matrix.platform }}-${{ matrix.io_uring }}
 
     - name: Cache OpenSSL
       id: cache-openssl
       uses: actions/cache@v4
       with:
         path: openssl
-        key: ${{ runner.os }}-openssl-${{ env.OPENSSL_VERSION }}-${{ matrix.os }}-${{ matrix.platform }}-${{ matrix.io_uring }}
+        key: openssl-${{ env.OPENSSL_VERSION }}-${{ matrix.os }}-${{ matrix.platform }}-${{ matrix.io_uring }}
 
     - name: Install dependencies
       run: |
