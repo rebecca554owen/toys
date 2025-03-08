@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入 openppp2 的 tag 名称'
         required: true
-        default: 'v1.1.5'
+        default: 'v1.1.6'
   push:
     tags:
       - 'v1.*'
@@ -87,7 +87,13 @@ jobs:
       if: ${{ matrix.io_uring }}
       run: |
         cd openppp2
-        sed -i 's|#add_definitions(-DBOOST_ASIO_HAS_IO_URING)|add_definitions(-DBOOST_ASIO_HAS_IO_URING)|' CMakeLists.txt
+        sed -i 's|# IF(PLATFORM_SYSTEM_LINUX)|IF(PLATFORM_SYSTEM_LINUX)|' CMakeLists.txt
+        sed -i 's|# *ADD_DEFINITIONS(-DBOOST_ASIO_HAS_IO_URING=1)|    ADD_DEFINITIONS(-DBOOST_ASIO_HAS_IO_URING=1)|' CMakeLists.txt
+        sed -i 's|# *ADD_DEFINITIONS(-DBOOST_ASIO_DISABLE_EPOLL=1)|    ADD_DEFINITIONS(-DBOOST_ASIO_DISABLE_EPOLL=1)|' CMakeLists.txt
+        sed -i 's|# ENDIF()|ENDIF()|' CMakeLists.txt
+        sed -i 's|# *liburing.a|liburing.a|g' CMakeLists.txt
+        # 验证修改结果
+        cat CMakeLists.txt
 
     - name: Cache Boost
       id: cache-boost
@@ -115,18 +121,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
           build-essential \
-          cmake \
-          gcc \
-          g++ \
-          libicu-dev \
-          libssl-dev \
-          libunwind8 \
-          zlib1g-dev \
-          autoconf \
-          automake \
-          libtool \
-          pkg-config
-        
+          cmake
         if ${{ matrix.io_uring }}; then
           sudo apt-get install -y liburing-dev
         fi
@@ -171,7 +166,7 @@ jobs:
         mkdir -p build
         cd build
         cmake .. -DCMAKE_BUILD_TYPE=Release \
-                -DBOOST_ASIO_HAS_IO_URING=${{ fromJSON(matrix.io_uring) && 1 || 0 }}
+                -DPLATFORM_SYSTEM_LINUX=ON
         make -j $(nproc)
 
     - name: Package openppp2
