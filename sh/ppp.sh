@@ -353,7 +353,7 @@ function modify_config() {
         [".udp.static.\"keep-alived\""]="[1,10]"
         [".udp.static.aggligator"]=0
         [".udp.static.servers"]="[\"${public_ip}:${listen_port}\"]"
-        [".websocket.host"]="ppp2.qisuyun.xyz"
+        [".websocket.host"]="openppp2.ai"
         [".websocket.path"]="/tun"
         [".websocket.listen.ws"]=2095
         [".websocket.listen.wss"]=2096
@@ -366,11 +366,17 @@ function modify_config() {
         [".client.bandwidth"]=0
         [".client.\"server-proxy\""]=""
         [".client.\"http-proxy\".bind"]="0.0.0.0"
-        [".client.\"http-proxy\".port"]=${listen_port}
+        [".client.\"http-proxy\".port"]=$((listen_port + 1))
         [".client.\"socks-proxy\".bind"]="::"
-        [".client.\"socks-proxy\".port"]=$((listen_port + 1))
+        [".client.\"socks-proxy\".port"]=$((listen_port + 2))
         [".client.\"socks-proxy\".username"]="admin"
         [".client.\"socks-proxy\".password"]="password"
+        [".client.mappings[0].\"local-ip\""]="127.0.0.1"
+        [".client.mappings[0].\"local-port\""]=$((listen_port + 3))
+        [".client.mappings[0].\"remote-port\""]=$((listen_port + 3))
+        [".client.mappings[1].\"local-ip\""]="127.0.0.1"
+        [".client.mappings[1].\"local-port\""]=$((listen_port + 4))
+        [".client.mappings[1].\"remote-port\""]=$((listen_port + 4))
     )
 
     echo -e "\n正在更新配置文件..."
