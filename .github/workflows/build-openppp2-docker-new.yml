@@ -7,6 +7,10 @@ on:
         description: '输入 openppp2 版本号,默认为最新版'
         required: false
         default: 'v1.1.6'
+  push:
+    tags:
+      - 'v1.*'
+
 env:
   REGISTRY_GHCR: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/openppp2
