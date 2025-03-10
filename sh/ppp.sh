@@ -110,10 +110,10 @@ function configure_service() {
     local restart_policy
 
     if [[ "$mode_choice" == "2" ]]; then
-        exec_start="/usr/bin/screen -DmS ppp $ppp_dir/ppp --mode=client --tun-host=no --tun-ssmt=4/mq --tun-flash=yes --tun-mux=0"
+        exec_start="/usr/bin/screen -DmS ppp $ppp_dir/ppp --mode=client --tun-flash=yes --tun-ssmt=4/mq --tun-host=no"
         restart_policy="no"
     else
-        exec_start="/usr/bin/screen -DmS ppp $ppp_dir/ppp --mode=server"
+        exec_start="/usr/bin/screen -DmS ppp $ppp_dir/ppp --mode=server --tun-flash"
         restart_policy="always"
     fi
 
