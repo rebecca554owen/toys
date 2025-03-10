@@ -1,0 +1,199 @@
+name: build-openppp2-binary-win
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '输入 openppp2 的 tag 名称'
+        required: true
+        default: 'v1.1.6'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+        platform: [x64, x86]
+        include:
+          - platform: x64
+            platform_name: windows-amd64
+            address_model: 64
+          - platform: x86
+            platform_name: windows-i386
+            address_model: 32
+
+    runs-on: ${{ matrix.os }}
+    env:
+      BOOST_VERSION: 1.86.0
+      JEMALLOC_VERSION: 5.3.0
+      OPENSSL_VERSION: 3.4.0
+
+    steps:
+    - name: Checkout openppp2 repository
+      uses: actions/checkout@v4
+      with: 
+        repository: liulilittle/openppp2
+        path: openppp2
+        ref: main
+
+    - name: Get openppp2 tag
+      id: get-tag
+      shell: pwsh
+      run: |
+        if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+          $tag = "${{ github.event.inputs.tag }}"
+        } else {
+          $tag = "${{ github.ref }}".Split('/')[-1]
+        }
+        Add-Content -Path $env:GITHUB_OUTPUT -Value "tag=$tag"
+
+    - name: Validate openppp2 tag
+      shell: pwsh
+      run: |
+        if (-not ("${{ steps.get-tag.outputs.tag }}" -match '^v1\.\d+\.\d+$')) {
+          Write-Error "错误：标签格式无效，应为v1.x.x"
+          exit 1
+        }
+
+        $PLATFORM_NAME = "${{ matrix.platform_name }}"
+        $ARTIFACT_NAME = "openppp2-${PLATFORM_NAME}.zip"
+        Add-Content -Path $env:GITHUB_ENV -Value "ARTIFACT_NAME=${ARTIFACT_NAME}"
+
+    - name: Set THIRD_PARTY_LIBRARY_DIR
+      shell: pwsh
+      run: |
+        $env:THIRD_PARTY_LIBRARY_DIR = $env:GITHUB_WORKSPACE
+        Write-Output "THIRD_PARTY_LIBRARY_DIR=$env:THIRD_PARTY_LIBRARY_DIR" >> $env:GITHUB_ENV
+
+    - name: Update CMakeLists.txt
+      shell: pwsh
+      run: |
+        $cmakePath = Join-Path $env:GITHUB_WORKSPACE "openppp2\CMakeLists.txt"
+        (Get-Content $cmakePath) -replace 'SET\(THIRD_PARTY_LIBRARY_DIR /root/dev\)', 'SET(THIRD_PARTY_LIBRARY_DIR $ENV{THIRD_PARTY_LIBRARY_DIR})' | Set-Content $cmakePath
+
+    - name: Cache Boost
+      id: cache-boost
+      uses: actions/cache@v4
+      with:
+        path: boost
+        key: ${{ matrix.platform }}-${{ matrix.os }}-boost-${{ env.BOOST_VERSION }}
+
+    - name: Cache Jemalloc
+      id: cache-jemalloc
+      uses: actions/cache@v4
+      with:
+        path: jemalloc
+        key: ${{ matrix.platform }}-${{ matrix.os }}-jemalloc-${{ env.JEMALLOC_VERSION }}
+
+    - name: Cache OpenSSL
+      id: cache-openssl
+      uses: actions/cache@v4
+      with:
+        path: openssl
+        key: ${{ matrix.platform }}-${{ matrix.os }}-openssl-${{ env.OPENSSL_VERSION }}
+
+    - name: Install dependencies
+      shell: pwsh
+      run: |
+        # 安装编译必需组件
+        choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+        
+        # 使用预装的VS2022环境
+        & "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.platform }}
+
+    - name: Build boost
+      id: build-boost
+      if: steps.cache-boost.outputs.cache-hit != 'true'
+      shell: pwsh
+      run: |
+        $boostVersion = "$env:BOOST_VERSION".Replace('.', '_')
+        Invoke-WebRequest -Uri "https://archives.boost.io/release/$env:BOOST_VERSION/source/boost_${boostVersion}.zip" -OutFile "boost_${boostVersion}.zip"
+        Expand-Archive boost_${boostVersion}.zip -DestinationPath .
+        Rename-Item "boost_${boostVersion}" boost
+        cd boost
+        ./bootstrap.bat
+        ./b2 address-model=${{ matrix.address_model }} --with-system --with-thread
+
+    - name: Force save boost cache
+      if: always() && steps.build-boost.outcome == 'success'
+      uses: actions/cache/save@v4
+      with:
+        path: boost
+        key: ${{ matrix.platform }}-${{ matrix.os }}-boost-${{ env.BOOST_VERSION }}
+
+    - name: Build jemalloc
+      id: build-jemalloc
+      if: steps.cache-jemalloc.outputs.cache-hit != 'true'
+      shell: pwsh
+      run: |
+        Invoke-WebRequest -Uri "https://github.com/jemalloc/jemalloc/releases/download/${{ env.JEMALLOC_VERSION }}/jemalloc-${{ env.JEMALLOC_VERSION }}.tar.bz2" -OutFile "jemalloc-${{ env.JEMALLOC_VERSION }}.tar.bz2"
+        tar jxvf jemalloc-${{ env.JEMALLOC_VERSION }}.tar.bz2
+        rm -rf jemalloc*.tar.bz2
+        mv jemalloc-* jemalloc
+        cd jemalloc
+        ./autogen.sh --with-jemalloc-prefix=je_
+        make -j $(nproc)
+
+    - name: Force save jemalloc cache
+      if: always() && steps.build-jemalloc.outcome =='success'
+      uses: actions/cache/save@v4
+      with:
+        path: jemalloc
+        key: ${{ matrix.platform }}-${{ matrix.os }}-jemalloc-${{ env.JEMALLOC_VERSION }}
+
+    - name: Build openssl
+      id: build-openssl
+      if: steps.cache-openssl.outputs.cache-hit != 'true'
+      shell: pwsh
+      run: |
+        choco install nasm -y
+        Invoke-WebRequest -Uri "https://github.com/openssl/openssl/releases/download/openssl-${{ env.OPENSSL_VERSION }}/openssl-${{ env.OPENSSL_VERSION }}.tar.gz" -OutFile "openssl-${{ env.OPENSSL_VERSION }}.tar.gz"
+        tar zxvf openssl-${{ env.OPENSSL_VERSION }}.tar.gz
+        rm -rf openssl*.tar.gz
+        mv openssl* openssl
+        cd openssl
+        ./Configure
+        make -j $(nproc)
+
+    - name: Force save openssl cache
+      if: always() && steps.build-openssl.outcome =='success'
+      uses: actions/cache/save@v4
+      with:
+        path: openssl
+        key: ${{ matrix.platform }}-${{ matrix.os }}-openssl-${{ env.OPENSSL_VERSION }}
+
+    - name: Build openppp2
+      shell: pwsh
+      run: |
+        cd openppp2
+        mkdir build
+        cd build
+        cmake .. -G "Visual Studio 17 2022" -A ${{ matrix.platform }} -DCMAKE_BUILD_TYPE=Release
+        cmake --build . --config Release --target ALL_BUILD
+
+    - name: Package openppp2
+      shell: pwsh
+      run: |
+        Compress-Archive -Path openppp2\bin\* -DestinationPath "openppp2\bin\$env:ARTIFACT_NAME"
+
+    - name: Upload openppp2
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.ARTIFACT_NAME }}
+        path: openppp2/bin/${{ env.ARTIFACT_NAME }}
+
+    - name: Record build time
+      shell: pwsh
+      run: |
+        $buildTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss" -TimeZone "China Standard Time"
+        Add-Content -Path $env:GITHUB_ENV -Value "BUILD_TIME=$buildTime"
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: openppp2/bin/${{ env.ARTIFACT_NAME }}
+        tag_name: ${{ steps.get-tag.outputs.tag }}
+        body: "Windows Build: ${{ env.BUILD_TIME }}"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
