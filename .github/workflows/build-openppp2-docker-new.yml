@@ -3,10 +3,10 @@ name: build-openppp2-docker-new # push docker image
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: '输入 openppp2 版本号,默认为最新版'
-        required: false
-        default: 'v1.1.6'
+      tag: 
+        description: '输入 openppp2 的 tag 名称'
+        required: true
+        default: 'v1.0.0'
   push:
     tags:
       - 'v1.*'
@@ -47,22 +47,23 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get version
-        id: get_version
+      - name: Get tag  # 步骤名称修改为 Get tag
+        id: get_tag
+        shell: bash
         run: |
-          if [ -z "${{ github.event.inputs.version }}" ]; then
-            VERSION="v1.0.0"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
           else
-            VERSION=${{ github.event.inputs.version }}
+            TAG="${GITHUB_REF#refs/tags/}"
           fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
 
       - name: Validate Docker tag
         run: |
-          VERSION=${{ steps.get_version.outputs.version }}
-          if ! echo "$VERSION" | grep -qE '^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$'; then
-            echo "::error::Invalid Docker tag: $VERSION"
-            echo "Docker tag must match regex: [a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}"
+          TAG=${{ steps.get_tag.outputs.tag }}  # 使用 get_tag 的输出
+          if ! echo "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then  # 验证标签格式
+            echo "::error::Invalid Docker tag: $TAG"
+            echo "Docker tag must match regex: ^v[0-9]+\.[0-9]+\.[0-9]+$"
             exit 1
           fi
 
@@ -88,26 +89,27 @@ jobs:
               ;;
           esac
 
-          VERSION=${{ steps.get_version.outputs.version }}
+          TAG=${{ steps.get_tag.outputs.tag }}
 
           # 下载正常版本（强制要求存在）
-          if [ "$VERSION" = "latest" ]; then
+          if [ "$TAG" = "latest" ]; then
             wget "https://github.com/rebecca554owen/toys/releases/latest/download/openppp2-${normal_suffix}.zip" -O normal.zip
           else
-            wget "https://github.com/rebecca554owen/toys/releases/download/${VERSION}/openppp2-${normal_suffix}.zip" -O normal.zip
+            wget "https://github.com/rebecca554owen/toys/releases/download/${TAG}/openppp2-${normal_suffix}.zip" -O normal.zip
           fi
 
           # 尝试下载io版本（可选）
-          if [ "$VERSION" = "latest" ]; then
+          if [ "$TAG" = "latest" ]; then
             wget "https://github.com/rebecca554owen/toys/releases/latest/download/openppp2-${io_suffix}.zip" -O io.zip || echo "::notice::跳过不存在的IO版本"
           else
-            wget "https://github.com/rebecca554owen/toys/releases/download/${VERSION}/openppp2-${io_suffix}.zip" -O io.zip || echo "::notice::跳过不存在的IO版本"
+            wget "https://github.com/rebecca554owen/toys/releases/download/${TAG}/openppp2-${io_suffix}.zip" -O io.zip || echo "::notice::跳过不存在的IO版本"
           fi
 
           # 处理正常版本
           if file normal.zip | grep -q "Zip archive data"; then
             unzip normal.zip -d .
             rm normal.zip
+            mv openppp2-${normal_suffix} ppp  # 添加重命名步骤
           else
             echo "::error::正常版本ZIP文件损坏或格式错误"
             exit 1
@@ -119,6 +121,7 @@ jobs:
               mkdir -p io
               unzip io.zip -d io/
               rm io.zip
+              mv io/openppp2-${io_suffix} io/ppp  # 添加重命名步骤
             else
               echo "::warning::IO版本ZIP文件损坏，已忽略"
               rm -f io.zip
@@ -135,16 +138,15 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: |
-            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.get_version.outputs.version }}
+            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.get_tag.outputs.tag }}
           build-args: |
-            VERSION=${{ steps.get_version.outputs.version }}
-          provenance: false
+            VERSION=${{ steps.get_tag.outputs.tag }}
 
       - name: Save digest
         shell: bash
         run: |
           mkdir -p /tmp/digests
-          DIGEST=$(docker buildx imagetools inspect ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.get_version.outputs.version }} --format '{{json .Manifest.Digest}}')
+          DIGEST=$(docker buildx imagetools inspect ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.get_tag.outputs.tag }} --format '{{json .Manifest.Digest}}')
           echo $DIGEST > /tmp/digests/${{ matrix.platform_name }}
         env:
           DOCKER_CLI_EXPERIMENTAL: enabled
@@ -177,15 +179,8 @@ jobs:
           images: |
             ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ github.event.inputs.version }}
+            type=raw,value=${{ github.event.inputs.tag }}
             type=raw,value=latest
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY_GHCR }}
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create manifest list and push
         working-directory: /tmp/digests
@@ -196,9 +191,9 @@ jobs:
           DIGEST_ARM64=$(cat linux-arm64 | tr -d '"')
 
           docker buildx imagetools create $DOCKER_TAGS \
-            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}@$DIGEST_AMD64 \
-            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}@$DIGEST_ARM64
-      
+            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:$TAG@$DIGEST_AMD64 \
+            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:$TAG@$DIGEST_ARM64
+
       - name: Inspect image
         run: |
-          docker buildx imagetools inspect ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          docker buildx imagetools inspect ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
