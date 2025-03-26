@@ -15,6 +15,10 @@ bash <(curl -Ls https://raw.githubusercontents.com/rebecca554owen/toys/main/sh/g
 ```
 bash <(curl -Ls https://raw.githubusercontents.com/rebecca554owen/toys/main/sh/ppp.sh)
 ```
+## v2bx.sh 适用于v2bx配置生成
+```
+wget -N https://raw.githubusercontent.com/rebecca554owen/toys/main/sh/v2bx.sh && chmod +x v2bx.sh && bash v2bx.sh
+```
 ## compose.yaml 适用于openppp2
 ```
 mkdir openppp2

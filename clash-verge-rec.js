@@ -14,12 +14,12 @@ const foreignNameservers = [
 const dnsConfig = {
   enable: true,
   listen: "0.0.0.0:1053",
-  "prefer-h3": true,
+  "prefer-h3": false,
   ipv6: true,
   "use-system-hosts": false, // true or false
   "cache-algorithm": "arc",
   "enhanced-mode": "fake-ip",
-  "fake-ip-range": "28.0.0.1/8",
+  "fake-ip-range": "172.29.0.1/16",
   "fake-ip-filter": [
     // 本地主机/设备
     "+.lan",
@@ -112,6 +112,12 @@ const ruleProviders = {
     url: "https://fastly.jsdelivr.net/gh/blackmatrix7/ios_rule_script@master/rule/Clash/Claude/Claude.yaml",
     path: "./rulesets/claude.yaml"
   },
+  ai: {
+    ...ruleProviderCommon,
+    behavior: "classical",
+    url: "https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/classical/category-ai-!cn.yaml",
+    path: "./rulesets/claude.yaml"
+  },
   private: {
     ...ruleProviderCommon,
     url: "https://fastly.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/private.txt",
@@ -143,7 +149,8 @@ const ruleProviders = {
 // 规则配置
 const rules = [
   // 自定义规则
-  "DOMAIN,lan.qisuyun.xyz,DIRECT",
+  "DOMAIN,lan.freewife.online,DIRECT",
+  "DOMAIN-SUFFIX,freewife.online,节点选择",
   "DOMAIN-SUFFIX,googleapis.cn,节点选择", // Google服务
   "DOMAIN-SUFFIX,gstatic.com,节点选择", // Google静态资源
   "DOMAIN-SUFFIX,xn--ngstr-lra8j.com,节点选择", // Google Play
@@ -157,6 +164,7 @@ const rules = [
   "RULE-SET,google,谷歌服务",
   "RULE-SET,openai,OpenAI",
   "RULE-SET,claude,Claude",
+  "RULE-SET,ai,OpenAI",
   "RULE-SET,tld-not-cn,节点选择",
   "RULE-SET,gfw,节点选择",
   "RULE-SET,proxy,节点选择",
@@ -176,8 +184,8 @@ const rules = [
 // 代理组通用配置
 const groupBaseOption = {
   interval: 300,
-  timeout: 3000,
-  url: "https://www.google.com/generate_204",
+  timeout: 1000,
+  url: "https://www.gstatic.com/generate_204",
   lazy: true,
   "max-failed-times": 3,
   hidden: false
