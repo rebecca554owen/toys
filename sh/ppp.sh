@@ -79,19 +79,22 @@ function get_version_and_download() {
             [[ -n "$download_url" && "$download_url" != "null" ]] && { selected_asset=$asset; break; }
         done
 
-        # 内核版本检查与版本选择（selected_asset 可能在此处被修改）
-        if [[ "$selected_asset" == "${assets[0]}" && "$can_use_io" == true ]]; then
-            echo "检测到当前内核版本支持 io_uring 特性（要求 5.10+）"
-            read -p "是否要使用 io_uring 优化版本？[Y/n] " use_io
+        # 内核版本检查与版本选择
+        if [[ "$can_use_io" == true ]]; then
+            read -p "是否要使用 io_uring 优化版本？（回车默认使用标准版本）[y/N] " use_io
             use_io=$(echo "$use_io" | tr '[:upper:]' '[:lower:]')
-            # 如果用户选择不使用io_uring版本，则降级到标准版
-            [[ "$use_io" == "n" || "$use_io" == "no" ]] && selected_asset="${assets[1]}"
-        elif [[ "$can_use_io" == false ]]; then
-            echo "当前内核版本不满足 io_uring 要求（需要 5.10+），自动选择标准版本"
+            if [[ "$use_io" != "y" ]]; then
+                selected_asset="${assets[1]}"
+            else
+                selected_asset="${assets[0]}"
+            fi
+        else
             selected_asset="${assets[1]}"  # 强制使用标准版
         fi
 
-        [[ -z "$selected_asset" ]] && { echo "无法获取到构建文件的下载链接。"; exit 1; }
+        # 获取对应版本的下载链接
+        download_url=$(echo "$release_info" | jq -r --arg name "$selected_asset" '.assets[] | select(.name == $name) | .browser_download_url')
+        [[ -z "$download_url" ]] && { echo "无法获取到构建文件的下载链接。"; exit 1; }
         echo "选择的构建文件: $selected_asset"  # 输出最终确定的构建文件名称
     fi
 
