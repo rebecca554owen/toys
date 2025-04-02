@@ -14,6 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         os: 
+          - ubuntu-20.04
           - ubuntu-22.04
         platform: 
           - linux/amd64
@@ -24,7 +25,11 @@ jobs:
             platform_name: linux-amd64
           - platform: linux/aarch64
             platform_name: linux-aarch64
-        exclude: []
+        exclude:
+          - os: ubuntu-20.04
+            io_uring: true
+          - os: ubuntu-22.04
+            io_uring: false
 
     runs-on: ${{ matrix.os }}
     env:
