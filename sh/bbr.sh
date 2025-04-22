@@ -7,8 +7,8 @@ get_system_info() {
     echo "====== 系统信息 ======"
     arch=$(uname -m)
     kern=$(uname -r)
-    echo "架构: $arch"
-    echo "内核版本: $kern"
+    date=$(date +%Y-%m-%d)
+    echo "架构: $arch 内核版本: $kern 日期: $date"
     echo "当前队列规则: $(sysctl net.core.default_qdisc | awk '{print $3}')"
     echo "当前拥塞控制: $(sysctl net.ipv4.tcp_congestion_control | awk '{print $3}')"
     echo "====================="
@@ -43,10 +43,9 @@ select_qdisc() {
     esac
 }
 
-# 生成sysctl配置
+# 生成sysctl配置并应用
 generate_sysctl_conf() {
-    select_qdisc
-    cat > /etc/sysctl.conf << EOF
+    cat > /etc/sysctl.d/99-sysctl.conf << EOF
 # /etc/sysctl.conf - 系统变量配置文件
 # 作者：周宇航
 # Date: $(date +%Y-%m-%d)
@@ -56,7 +55,7 @@ fs.file-max=1024000
 fs.inotify.max_user_instances=65536
 
 # 虚拟内存相关配置
-vm.swappiness=1
+vm.swappiness=10
 vm.dirty_ratio=15
 vm.dirty_background_ratio=5
 vm.overcommit_memory=1
@@ -70,32 +69,37 @@ net.core.netdev_budget=65536
 net.core.netdev_budget_usecs=4096
 net.core.busy_poll=50
 net.core.busy_read=50
-net.core.rmem_max=33554432
-net.core.wmem_max=33554432
+net.core.rmem_max=16777216
+net.core.wmem_max=16777216
 net.core.netdev_max_backlog=32768
-net.core.somaxconn=32768
+net.core.somaxconn=4096
 
 # IPv4 TCP 基础参数配置
-net.ipv4.tcp_timestamps=0
+net.ipv4.tcp_timestamps=1
 net.ipv4.tcp_no_metrics_save=1
 net.ipv4.tcp_ecn=0
 net.ipv4.tcp_frto=0
 net.ipv4.tcp_mtu_probing=0
-net.ipv4.tcp_rfc1337=0
+net.ipv4.tcp_rfc1337=1
 net.ipv4.tcp_sack=1
 net.ipv4.tcp_fack=1
 net.ipv4.tcp_window_scaling=1
-net.ipv4.tcp_adv_win_scale=1
+net.ipv4.tcp_adv_win_scale=2
 net.ipv4.tcp_moderate_rcvbuf=1
-net.ipv4.tcp_rmem=4096 87380 33554432
-net.ipv4.tcp_wmem=4096 16384 33554432
+net.ipv4.tcp_rmem=4096 65536 16777216
+net.ipv4.tcp_wmem=4096 65536 16777216
 net.ipv4.udp_rmem_min=8192
 net.ipv4.udp_wmem_min=8192
 
 # IPv4 TCP 连接管理参数配置
-net.ipv4.tcp_max_syn_backlog=262144
+net.ipv4.tcp_max_syn_backlog=4096
 net.ipv4.tcp_tw_reuse=1
 net.ipv4.ip_local_port_range=1024 65535
+net.ipv4.tcp_abort_on_overflow=1
+net.ipv4.conf.all.rp_filter=0
+
+# 文件系统相关配置
+fs.file-max=6553560
 net.ipv4.tcp_pacing_ca_ratio=110
 net.ipv4.ip_forward=1
 net.ipv4.conf.all.route_localnet=1
@@ -151,64 +155,41 @@ kernel.numa_balancing=0
 net.core.default_qdisc=$qdisc  
 net.ipv4.tcp_congestion_control=$congestion_control  
 EOF
-    cp /etc/sysctl.conf /etc/sysctl.d/99-sysctl.conf
-}
-
-# 设置 ulimit 配置
-set_ulimit() {
-    cat > /etc/security/limits.conf << EOF
-* soft nofile $((1024 * 1024))
-* hard nofile $((1024 * 1024))
-* soft nproc unlimited
-* hard nproc unlimited
-* soft core unlimited
-* hard core unlimited
-EOF
-    sed -i '/ulimit -SHn/d' /etc/profile
-    echo "ulimit -SHn $((1024 * 1024))" >> /etc/profile
-    if ! grep -q "pam_limits.so" /etc/pam.d/common-session; then
-        echo "session required pam_limits.so" >> /etc/pam.d/common-session
-    fi
-}
-
-# 应用配置并提示
-apply_config() {
+    echo "配置已写入 /etc/sysctl.d/99-sysctl.conf"
     sysctl --system
-    echo "队列算法: $qdisc"
-    echo "拥塞控制: $congestion_control"
-    echo "配置已应用，需要重启才能完全生效"
+    echo "系统已重新加载配置"
 }
 
-# 清理优化并重新加载sysctl配置
+# 清理优化
 cleanup() {
     clear
     # 清理 sysctl 配置
-    rm -f /etc/sysctl.d/*.conf
-    rm -f /usr/lib/sysctl.d/*.conf
-    cat /dev/null > /etc/sysctl.conf
-    
-    # 清理 limits 配置
-    cat /dev/null > /etc/security/limits.conf  # 清空资源限制配置
-    sed -i '/ulimit -SHn/d' /etc/profile        # 删除 profile 中的 ulimit 设置
-    sed -i '/pam_limits.so/d' /etc/pam.d/common-session  # 移除 PAM 模块
-    
-    apply_config
-    echo "优化已清理，系统已重新加载配置"
+    rm -f /usr/lib/sysctl.d/99-sysctl.conf
+    echo "已清理 /etc/sysctl.d/99-sysctl.conf"
+    sysctl --system
+    echo "系统已重新加载配置"
 }
 
 # 菜单
 menu() {
     while true; do
         echo "====== 系统优化菜单 ======"
-        echo "1. 配置并应用BBR优化"
-        echo "2. 清理优化"
+        echo "1. 应用BBR优化(bbr + fq)"
+        echo "2. 自定义优化方案"
         echo "3. 重启系统"
         echo "0. 退出"
         read -p "请输入选项 [0-3]: " option
-        
+
         case $option in
-            1) generate_sysctl_conf && set_ulimit && apply_config ;;
-            2) cleanup ;;
+            1) 
+                qdisc="fq"
+                congestion_control="bbr"
+                generate_sysctl_conf
+                ;;
+            2) 
+                select_qdisc
+                generate_sysctl_conf
+                ;;
             3) systemctl reboot ;;
             0) exit 0 ;;
             *) echo "无效选项" ;;
