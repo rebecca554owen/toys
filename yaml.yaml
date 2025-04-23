@@ -27,14 +27,14 @@ proxies:
     username: admin
     password: password
 
-  - name: HK-hks
+  - name: HK-bage-v4
     type: socks5
     server: 192.168.1.10
     port: 1084
     username: admin
     password: password
 
-  - name: HK-test
+  - name: HK-cmi-n2
     type: socks5
     server: 192.168.1.10
     port: 1085

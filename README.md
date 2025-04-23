@@ -17,7 +17,12 @@ bash <(curl -Ls https://raw.githubusercontents.com/rebecca554owen/toys/main/sh/p
 ```
 ## v2bx.sh 适用于v2bx配置生成
 ```
-wget -N https://raw.githubusercontent.com/rebecca554owen/toys/main/sh/v2bx.sh && chmod +x v2bx.sh && bash v2bx.sh
+bash <(curl -Ls https://raw.githubusercontent.com/rebecca554owen/toys/main/sh/v2bx.sh) \
+  CoreType=xray \
+  ApiHost=api.example.com \
+  ApiKey=your_api_key \
+  NodeID=1 \
+  NodeType=shadowsocks
 ```
 ## compose.yaml 适用于openppp2
 ```

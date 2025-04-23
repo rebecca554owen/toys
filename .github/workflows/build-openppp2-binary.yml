@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入 openppp2 的 tag 名称'
         required: true
-        default: 'v1.3.0'
+        default: 'v1.6.0'
 
 jobs:
   build:
@@ -14,7 +14,6 @@ jobs:
       fail-fast: false
       matrix:
         os: 
-          - ubuntu-20.04
           - ubuntu-22.04
         platform: 
           - linux/amd64
@@ -25,11 +24,6 @@ jobs:
             platform_name: linux-amd64
           - platform: linux/aarch64
             platform_name: linux-aarch64
-        exclude:
-          - os: ubuntu-20.04
-            io_uring: true
-          - os: ubuntu-22.04
-            io_uring: false
 
     runs-on: ${{ matrix.os }}
     env:

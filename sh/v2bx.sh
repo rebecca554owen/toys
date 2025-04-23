@@ -11,6 +11,9 @@ v2bx_config="/etc/V2bX/config.json"
 
 # 默认配置
 DEFAULT_LOG_LEVEL="info"
+DEFAULT_OUTBOUND_CONFIG_PATH="/etc/V2bX/custom_outbound.json" # 默认值 /etc/V2bX/custom_outbound.json
+DEFAULT_ROUTE_CONFIG_PATH="/etc/V2bX/route.json" # 默认值 /etc/V2bX/route.json
+DEFAULT_ORIGINAL_PATH="" # 默认值 /etc/V2bX/sing_origin.json 文件不存在，留空
 DEFAULT_API_HOST="https://api.example.com"
 DEFAULT_API_KEY="your_api_key"
 DEFAULT_NODE_ID="1"
@@ -30,6 +33,9 @@ load_config() {
         # 使用jq一次性提取所有配置项
         local parsed_config=$(jq -r '{
             LogLevel: .Log.Level,
+            OutboundConfigPath: .Cores[0].OutboundConfigPath,
+            RouteConfigPath: .Cores[0].RouteConfigPath,
+            OriginalPath: .Cores[0].OriginalPath,
             ApiHost: .Nodes[0].ApiHost,
             ApiKey: .Nodes[0].ApiKey,
             NodeID: .Nodes[0].NodeID,
@@ -44,6 +50,9 @@ load_config() {
         if [ $? -eq 0 ]; then
             declare -A default_config=(
                 [LogLevel]="$DEFAULT_LOG_LEVEL"
+                [OutboundConfigPath]="$DEFAULT_OUTBOUND_CONFIG_PATH"
+                [RouteConfigPath]="$DEFAULT_ROUTE_CONFIG_PATH"
+                [OriginalPath]="$DEFAULT_ORIGINAL_PATH"
                 [ApiHost]="$DEFAULT_API_HOST"
                 [ApiKey]="$DEFAULT_API_KEY"
                 [NodeID]="$DEFAULT_NODE_ID"
@@ -56,12 +65,20 @@ load_config() {
             )
             # 遍历解析结果并赋值给config数组
             while IFS='=' read -r key value; do
-                [ -n "$value" ] && config["$key"]="$value" || config["$key"]="${default_config[$key]}"
+                # 当解析值为空或null时使用默认值
+                if [ -z "$value" ] || [ "$value" == "null" ]; then
+                    config["$key"]="${default_config[$key]}"
+                else
+                    config["$key"]="$value"
+                fi
             done <<<"$parsed_config"
         else
             echo -e "${RED}配置文件解析失败，使用默认配置${NC}"
             config=(
                 [LogLevel]="$DEFAULT_LOG_LEVEL"
+                [OutboundConfigPath]="$DEFAULT_OUTBOUND_CONFIG_PATH"
+                [RouteConfigPath]="$DEFAULT_ROUTE_CONFIG_PATH"
+                [OriginalPath]="$DEFAULT_ORIGINAL_PATH"
                 [ApiHost]="$DEFAULT_API_HOST"
                 [ApiKey]="$DEFAULT_API_KEY"
                 [NodeID]="$DEFAULT_NODE_ID"
@@ -75,16 +92,28 @@ load_config() {
         fi
     else
         echo -e "${RED}配置文件不存在，使用默认配置${NC}"
-        config["LogLevel"]="$DEFAULT_LOG_LEVEL"
-        config["ApiHost"]="$DEFAULT_API_HOST"
-        config["ApiKey"]="$DEFAULT_API_KEY"
-        config["NodeID"]="$DEFAULT_NODE_ID"
-        config["CoreType"]="$DEFAULT_CORE_TYPE"
-        config["NodeType"]="$DEFAULT_NODE_TYPE"
-        config["CertMode"]="$DEFAULT_CERT_MODE"
-        config["CertDomain"]="$DEFAULT_CERT_DOMAIN"
-        config["CF_API_EMAIL"]="$DEFAULT_CF_API_EMAIL"
-        config["CF_API_KEY"]="$DEFAULT_CF_API_KEY"
+        # 首先设置所有默认值
+        config=(
+            [LogLevel]="$DEFAULT_LOG_LEVEL"
+            [OutboundConfigPath]="$DEFAULT_OUTBOUND_CONFIG_PATH"
+            [RouteConfigPath]="$DEFAULT_ROUTE_CONFIG_PATH"
+            [OriginalPath]="$DEFAULT_ORIGINAL_PATH"
+            [ApiHost]="$DEFAULT_API_HOST"
+            [ApiKey]="$DEFAULT_API_KEY"
+            [NodeID]="$DEFAULT_NODE_ID"
+            [CoreType]="$DEFAULT_CORE_TYPE"
+            [NodeType]="$DEFAULT_NODE_TYPE"
+            [CertMode]="$DEFAULT_CERT_MODE"
+            [CertDomain]="$DEFAULT_CERT_DOMAIN"
+            [CF_API_EMAIL]="$DEFAULT_CF_API_EMAIL"
+            [CF_API_KEY]="$DEFAULT_CF_API_KEY"
+        )
+        # 然后检查并应用传入的参数值
+        for key in "${!config[@]}"; do
+            if [ -n "${config[$key]}" ]; then
+                config["$key"]="${config[$key]}"
+            fi
+        done
     fi
     # 将配置变量导出到全局环境
     for key in "${!config[@]}"; do
@@ -97,6 +126,9 @@ display_config() {
     load_config  # 加载配置
     echo -e "${GREEN}配置信息如下：${NC}"
     echo -e "LogLevel:       ${config[LogLevel]}"
+    echo -e "OutboundConfigPath: ${config[OutboundConfigPath]}"
+    echo -e "RouteConfigPath: ${config[RouteConfigPath]}"
+    echo -e "OriginalPath: ${config[OriginalPath]}"
     echo -e "ApiHost:        ${config[ApiHost]}"
     echo -e "ApiKey:         ${config[ApiKey]}"
     echo -e "NodeID:         ${config[NodeID]}"
@@ -181,8 +213,8 @@ generate_core_config() {
         "Level": "$LogLevel",
         "ErrorPath": "/etc/V2bX/$LogLevel.log"
     },
-    "OutboundConfigPath": "/etc/V2bX/custom_outbound.json",
-    "RouteConfigPath": "/etc/V2bX/route.json"
+    "OutboundConfigPath": "$OutboundConfigPath",
+    "RouteConfigPath": "$RouteConfigPath"
 }
 EOF
         )
@@ -214,7 +246,7 @@ EOF
             "StoreFakeIP": true
         }
     },
-    "OriginalPath": "/etc/V2bX/sing_origin.json"
+    "OriginalPath": "$OriginalPath"
 }
 EOF
         )
@@ -396,6 +428,11 @@ generate_full_config() {
 
 # 主函数
 main() {
+    # 检查是否安装 jq 
+    if ! command -v jq &>/dev/null; then
+        echo -e "${YELLOW}正在安装jq...${NC}"
+        apt install -y jq
+    fi
     # 如果有参数则使用快速设置模式
     if [ $# -gt 0 ]; then
         quick_setup "$@"
