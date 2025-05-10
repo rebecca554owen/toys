@@ -73,7 +73,12 @@ const proxyProviders = {
     type: "http",
     interval: 3600,
     url: "https://raw.githubusercontents.com/rebecca554owen/toys/main/yaml.yaml",
-    path: "./airport.yaml"
+    path: "./provider1.yaml"
+  },
+  "provider2": {
+    type: "file",
+    interval: 3600,
+    path: "provider2.yaml"
   }
 };
 
