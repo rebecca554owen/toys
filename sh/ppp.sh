@@ -1,6 +1,6 @@
 #!/bin/bash
 
-ppp_dir="/etc/ppp" # 定义ppp安装目录
+ppp_dir="/opt/ppp" # 定义ppp安装目录
 
 # 检测操作系统
 OS=""

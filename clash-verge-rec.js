@@ -13,9 +13,9 @@ const foreignNameservers = [
 // DNS配置
 const dnsConfig = {
   enable: true,
-  listen: "0.0.0.0:1053",
-  "prefer-h3": false,
   ipv6: true,
+  listen: "0.0.0.0:1053",
+  "prefer-h3": true,
   "use-system-hosts": false,  // true or false
   "cache-algorithm": "arc",
   "enhanced-mode": "fake-ip",
@@ -50,18 +50,17 @@ const rules = [
   // 自定义规则
   "DOMAIN,lan.freewife.online,DIRECT",
   "DOMAIN-SUFFIX,freewife.online,节点选择",
-  "DOMAIN-SUFFIX,googleapis.cn,节点选择", // Google服务
-  "DOMAIN-SUFFIX,gstatic.com,节点选择", // Google静态资源
-  // 代理规则
-  "GEOIP,lan,DIRECT,no-resolve",
+  // Geo规则
+  "GEOSITE,geolocation-!cn,节点选择",
+  "GEOSITE,telegram,Telegram",
   "GEOSITE,youtube,节点选择",
   "GEOSITE,google,节点选择",
   "GEOSITE,github,节点选择",
-  "GEOSITE,telegram,Telegram",
+  "GEOSITE,category-ai-!cn,AI",
   "GEOSITE,CN,DIRECT",
-  "GEOSITE,geolocation-!cn,节点选择",
-  "GEOIP,google,节点选择",
+  "GEOIP,lan,DIRECT,no-resolve",
   "GEOIP,telegram,Telegram",
+  "GEOIP,google,节点选择",
   "GEOIP,CN,DIRECT",
   // 兜底规则
   "MATCH,节点选择"
@@ -72,8 +71,13 @@ const proxyProviders = {
   "provider1": {
     type: "http",
     interval: 3600,
-    url: "https://raw.githubusercontents.com/rebecca554owen/toys/main/yaml.yaml",
-    path: "./airport.yaml"
+    url: "https://raw.githubusercontent.com/rebecca554owen/toys/main/yaml.yaml",
+    path: "./provider1.yaml"
+  },
+  "provider2": {
+    type: "file",
+    interval: 3600,
+    path: "./provider2.yaml"
   }
 };
 
@@ -132,7 +136,7 @@ function main(config) {
       ...groupBaseOption,
       name: "节点选择",
       type: "select",
-      proxies: ["延迟选优", "故障转移", "relay转发", "前置节点", "HongKong", "TaiWan", "Singapore", "Japan", "America", "Others"],
+      proxies: ["前置节点","relay","延迟选优","故障转移","HongKong","TaiWan","Singapore","Japan","America","Others"],
       "include-all": true,
       icon: "https://fastly.jsdelivr.net/gh/clash-verge-rev/clash-verge-rev.github.io@main/docs/assets/icons/adjust.svg"
     },
@@ -140,7 +144,7 @@ function main(config) {
       ...groupBaseOption,
       name: "前置节点",
       type: "select",
-      proxies: ["HongKong", "TaiWan", "Singapore", "Japan", "America", "Others"],
+      proxies: ["HongKong","TaiWan","Singapore","Japan","America"],
       "include-all": true,
       icon: "https://fastly.jsdelivr.net/gh/clash-verge-rev/clash-verge-rev.github.io@main/docs/assets/icons/cloudflare.svg"
     },
@@ -154,7 +158,7 @@ function main(config) {
     },
     {
       ...groupBaseOption,
-      name: "relay转发",
+      name: "relay",
       type: "relay",
       proxies: ["前置节点", "出口节点"],
       hidden: true,
@@ -173,6 +177,7 @@ function main(config) {
       ...groupBaseOption,
       name: "故障转移",
       type: "fallback",
+      proxies: [],
       "include-all": true,
       hidden: true,
       icon: "https://fastly.jsdelivr.net/gh/clash-verge-rev/clash-verge-rev.github.io@main/docs/assets/icons/ambulance.svg"
@@ -181,24 +186,15 @@ function main(config) {
       ...groupBaseOption,
       name: "Telegram",
       type: "select",
-      proxies: ["节点选择", "HongKong", "TaiWan", "Singapore", "Japan", "America", "Others"],
+      proxies: ["节点选择","HongKong","TaiWan","Singapore","Japan","America","Others"],
       "include-all": true,
       icon: "https://fastly.jsdelivr.net/gh/clash-verge-rev/clash-verge-rev.github.io@main/docs/assets/icons/telegram.svg"
     },
     {
       ...groupBaseOption,
-      name: "微软服务",
-      type: "select",
-      proxies: ["DIRECT", "节点选择", "HongKong", "TaiWan", "Singapore", "Japan", "America", "Others"],
-      "include-all": true,
-      hidden: true,
-      icon: "https://fastly.jsdelivr.net/gh/clash-verge-rev/clash-verge-rev.github.io@main/docs/assets/icons/microsoft.svg"
-    },
-    {
-      ...groupBaseOption,
       name: "AI",
       type: "select",
-      proxies: ["节点选择", "HongKong", "TaiWan", "Singapore", "Japan", "America", "Others"],
+      proxies: ["节点选择","HongKong","TaiWan","Singapore","Japan","America","Others"],
       "include-all": true,
       icon: "https://fastly.jsdelivr.net/gh/clash-verge-rev/clash-verge-rev.github.io@main/docs/assets/icons/chatgpt.svg"
     },
@@ -247,10 +243,10 @@ function main(config) {
       proxies: othersProxies.length > 0 ? othersProxies : ["DIRECT"]
     }
   ];
-  // 覆盖原配置中rules配置
+  // 覆盖原配置中 rules 配置
   config["rules"] = rules;
 
-  // 覆盖原配置中DNS配置
+  // 覆盖原配置中 DNS 配置
   config["dns"] = dnsConfig;
 
   // 返回修改后的配置

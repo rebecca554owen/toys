@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入 openppp2 的 tag 名称'
         required: true
-        default: 'v1.6.0'
+        default: 'v1.7.0'
 
 jobs:
   build:
@@ -30,7 +30,7 @@ jobs:
       ACTIONS_ALLOW_UNSECURE_COMMANDS: true
       BOOST_VERSION: 1.86.0
       JEMALLOC_VERSION: 5.3.0
-      OPENSSL_VERSION: 3.4.0
+      OPENSSL_VERSION: 3.5.0
 
     steps:
     - name: Checkout openppp2 repository
