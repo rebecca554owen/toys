@@ -2,6 +2,6 @@ proxies:
   - name: SG-nube
     type: socks5
     server: 127.0.0.1
-    port: 1080
+    port: 1084
     username: admin
     password: password
