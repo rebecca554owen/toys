@@ -54,12 +54,22 @@ generate_sysctl_conf() {
 fs.file-max=1024000
 fs.inotify.max_user_instances=65536
 
+# 内核相关配置
+kernel.pid_max=65535
+kernel.panic=1
+kernel.sysrq=1
+kernel.core_pattern=core_%e
+kernel.printk=3 4 1 3
+kernel.numa_balancing=0
+kernel.sched_autogroup_enabled=0
+
 # 虚拟内存相关配置
 vm.swappiness=10
-vm.dirty_ratio=15
+vm.dirty_ratio=10
 vm.dirty_background_ratio=5
+vm.panic_on_oom=1
 vm.overcommit_memory=1
-vm.min_free_kbytes=65536
+vm.min_free_kbytes=153600
 vm.vfs_cache_pressure=50
 
 # 网络核心参数配置
@@ -76,18 +86,18 @@ net.core.somaxconn=4096
 
 # IPv4 TCP 基础参数配置
 net.ipv4.tcp_timestamps=1
-net.ipv4.tcp_no_metrics_save=1
+net.ipv4.tcp_no_metrics_save=0
 net.ipv4.tcp_ecn=0
 net.ipv4.tcp_frto=0
-net.ipv4.tcp_mtu_probing=0
-net.ipv4.tcp_rfc1337=1
+net.ipv4.tcp_mtu_probing=1
+net.ipv4.tcp_rfc1337=0
 net.ipv4.tcp_sack=1
-net.ipv4.tcp_fack=1
+net.ipv4.tcp_fack=0
 net.ipv4.tcp_window_scaling=1
 net.ipv4.tcp_adv_win_scale=2
 net.ipv4.tcp_moderate_rcvbuf=1
-net.ipv4.tcp_rmem=4096 65536 16777216
-net.ipv4.tcp_wmem=4096 65536 16777216
+net.ipv4.tcp_rmem=8192 87380 66060287
+net.ipv4.tcp_wmem=8192 65536 33030143
 net.ipv4.udp_rmem_min=8192
 net.ipv4.udp_wmem_min=8192
 
@@ -95,8 +105,17 @@ net.ipv4.udp_wmem_min=8192
 net.ipv4.tcp_max_syn_backlog=4096
 net.ipv4.tcp_tw_reuse=1
 net.ipv4.ip_local_port_range=1024 65535
-net.ipv4.tcp_abort_on_overflow=1
-net.ipv4.conf.all.rp_filter=0
+net.ipv4.tcp_abort_on_overflow=0
+net.ipv4.tcp_max_orphans=65536
+net.ipv4.tcp_synack_retries=2
+net.ipv4.tcp_syn_retries=3
+net.ipv4.tcp_stdurg=0
+net.ipv4.conf.all.rp_filter=1
+net.ipv4.conf.default.rp_filter=1
+net.ipv4.conf.all.arp_announce=2
+net.ipv4.conf.default.arp_announce=2
+net.ipv4.conf.all.arp_ignore=1
+net.ipv4.conf.default.arp_ignore=1
 
 # 文件系统相关配置
 fs.file-max=6553560

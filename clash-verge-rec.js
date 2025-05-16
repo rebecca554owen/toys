@@ -72,13 +72,13 @@ const proxyProviders = {
   "provider1": {
     type: "http",
     interval: 3600,
-    url: "https://raw.githubusercontents.com/rebecca554owen/toys/main/yaml.yaml",
+    url: "https://raw.githubusercontent.com/rebecca554owen/toys/main/yaml.yaml",
     path: "./provider1.yaml"
   },
   "provider2": {
     type: "file",
     interval: 3600,
-    path: "provider2.yaml"
+    path: "./provider2.yaml"
   }
 };
 
@@ -137,7 +137,7 @@ function main(config) {
       ...groupBaseOption,
       name: "节点选择",
       type: "select",
-      proxies: ["延迟选优", "故障转移", "relay转发", "前置节点", "HongKong", "TaiWan", "Singapore", "Japan", "America", "Others"],
+      proxies: ["延迟选优", "故障转移", "relay", "前置节点", "HongKong", "TaiWan", "Singapore", "Japan", "America", "Others"],
       "include-all": true,
       icon: "https://fastly.jsdelivr.net/gh/clash-verge-rev/clash-verge-rev.github.io@main/docs/assets/icons/adjust.svg"
     },
@@ -159,7 +159,7 @@ function main(config) {
     },
     {
       ...groupBaseOption,
-      name: "relay转发",
+      name: "relay",
       type: "relay",
       proxies: ["前置节点", "出口节点"],
       hidden: true,
