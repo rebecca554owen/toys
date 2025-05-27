@@ -6,7 +6,10 @@ on:
       tag:
         description: 'Docker image tag,默认为latest'
         required: false
-        default: 'latest'
+        default: 'v1.0.0'
+  push:
+    branches:
+      - main
 
 env:
   REGISTRY_GHCR: ghcr.io
@@ -29,17 +32,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          path: v2b
+          fetch-depth: 1
+
+      - name: Checkout submodules
+        uses: actions/checkout@v4
+        with:
           repository: wyx2685/v2board
-          path: v2board
-          ref: master
+          path: v2b/v2board
+          fetch-depth: 1
 
       - name: Set up QEMU for multi-platform builds
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          buildkitd-flags: --debug
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -49,12 +56,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Get tag
-        id: get_tag
+        id: get-tag
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-          else
+          elif [ "${{ github.event_name }}" = "push" ] && [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=v1.0.0" >> $GITHUB_OUTPUT
           fi
 
       - name: Validate Docker tag
@@ -64,7 +73,13 @@ jobs:
           exit 1
           fi
 
-      - name: Build and push platform-specific images
+      - name: Check file location
+        run: |
+          echo "当前工作目录: $(pwd)"
+          ls -la v2b/  # 检查 v2b/ 下是否有 Dockerfile
+          ls -la v2b/v2board/  # 检查子模块是否检出
+
+      - name: Build and push images
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -74,13 +89,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: |
-            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.get_tag.outputs.tag }}
+            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.get-tag.outputs.tag }}
 
       - name: Save digest
         shell: bash
         run: |
           mkdir -p /tmp/digests
-          DIGEST=$(docker buildx imagetools inspect ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.get_tag.outputs.tag }} --format '{{json .Manifest.Digest}}')
+          DIGEST=$(docker buildx imagetools inspect ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.get-tag.outputs.tag }} --format '{{json .Manifest.Digest}}')
           echo $DIGEST > /tmp/digests/${{ matrix.platform_name }}
         env:
           DOCKER_CLI_EXPERIMENTAL: enabled
@@ -138,3 +153,4 @@ jobs:
       - name: Inspect image
         run: |
           docker buildx imagetools inspect ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          docker buildx imagetools inspect ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest

@@ -45,14 +45,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Get tag
-        id: get_tag
+        id: get-tag
         run: |
-          if [ -z "${{ github.event.inputs.tag }}" ]; then
-            TAG=$(git describe --tags --always)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "push" ] && [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           else
-            TAG=${{ github.event.inputs.tag }}
+            echo "tag=v1.0.0" >> $GITHUB_OUTPUT
           fi
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
 
       - name: Validate Docker tag
         run: |
@@ -71,14 +72,14 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: |
-            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.get_tag.outputs.tag }}
+            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.get-tag.outputs.tag }}
           provenance: false
 
       - name: Save digest
         shell: bash
         run: |
           mkdir -p /tmp/digests
-          DIGEST=$(docker buildx imagetools inspect ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.get_tag.outputs.tag }} --format '{{json .Manifest.Digest}}')
+          DIGEST=$(docker buildx imagetools inspect ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.get-tag.outputs.tag }} --format '{{json .Manifest.Digest}}')
           echo $DIGEST > /tmp/digests/${{ matrix.platform_name }}
         env:
           DOCKER_CLI_EXPERIMENTAL: enabled

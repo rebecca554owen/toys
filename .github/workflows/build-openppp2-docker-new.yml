@@ -43,12 +43,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Get tag
-        id: get_tag
+        id: get-tag
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-          else
+          elif [ "${{ github.event_name }}" = "push" ] && [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=v1.0.0" >> $GITHUB_OUTPUT
           fi
 
       - name: Validate Docker tag
@@ -80,20 +82,20 @@ jobs:
               ;;
           esac
 
-          TAG=${{ steps.get_tag.outputs.tag }}
+          tag=${{ steps.get-tag.outputs.tag }}
 
           # 下载正常版本（强制要求存在）
-          if [ "$TAG" = "latest" ]; then
+          if [ "$tag" = "latest" ]; then
             wget "https://github.com/rebecca554owen/toys/releases/latest/download/openppp2-${normal_suffix}.zip" -O normal.zip
           else
-            wget "https://github.com/rebecca554owen/toys/releases/download/${TAG}/openppp2-${normal_suffix}.zip" -O normal.zip
+            wget "https://github.com/rebecca554owen/toys/releases/download/${tag}/openppp2-${normal_suffix}.zip" -O normal.zip
           fi
 
           # 尝试下载io版本（可选）
-          if [ "$TAG" = "latest" ]; then
+          if [ "$tag" = "latest" ]; then
             wget "https://github.com/rebecca554owen/toys/releases/latest/download/openppp2-${io_suffix}.zip" -O io.zip || echo "::notice::跳过不存在的IO版本"
           else
-            wget "https://github.com/rebecca554owen/toys/releases/download/${TAG}/openppp2-${io_suffix}.zip" -O io.zip || echo "::notice::跳过不存在的IO版本"
+            wget "https://github.com/rebecca554owen/toys/releases/download/${tag}/openppp2-${io_suffix}.zip" -O io.zip || echo "::notice::跳过不存在的IO版本"
           fi
 
           # 处理正常版本
@@ -127,13 +129,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.get_tag.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.get-tag.outputs.tag }}
 
       - name: Save digest
         shell: bash
         run: |
           mkdir -p /tmp/digests
-          DIGEST=$(docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.get_tag.outputs.tag }} --format '{{json .Manifest.Digest}}')
+          DIGEST=$(docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.get-tag.outputs.tag }} --format '{{json .Manifest.Digest}}')
           echo $DIGEST > /tmp/digests/${{ matrix.platform_name }}
 
       - name: Upload digests

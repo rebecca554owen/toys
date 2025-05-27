@@ -46,8 +46,10 @@ jobs:
       run: |
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
           echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-        else
+        elif [ "${{ github.event_name }}" = "push" ] && [[ "${GITHUB_REF}" == refs/tags/* ]]; then
           echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        else
+          echo "tag=v1.0.0" >> $GITHUB_OUTPUT
         fi
 
     - name: Validate openppp2 tag
