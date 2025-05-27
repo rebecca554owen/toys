@@ -1,4 +1,4 @@
-name: nginx-tunnel-docker
+name: v2board-docker
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ on:
 
 env:
   REGISTRY_GHCR: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/tunnel
+  IMAGE_NAME: ${{ github.repository_owner }}/v2board
 
 jobs:
   build-and-push:
@@ -28,6 +28,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          repository: wyx2685/v2board
+          path: v2board
+          ref: master
 
       - name: Set up QEMU for multi-platform builds
         uses: docker/setup-qemu-action@v3
@@ -47,12 +51,11 @@ jobs:
       - name: Get tag
         id: get_tag
         run: |
-          if [ -z "${{ github.event.inputs.tag }}" ]; then
-            TAG=$(git describe --tags --always)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
           else
-            TAG=${{ github.event.inputs.tag }}
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           fi
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
 
       - name: Validate Docker tag
         run: |
@@ -65,14 +68,13 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./tunnel/Dockerfile
+          file: ./v2b/Dockerfile
           push: true
           platforms: ${{ matrix.platform }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: |
             ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.get_tag.outputs.tag }}
-          provenance: false
 
       - name: Save digest
         shell: bash

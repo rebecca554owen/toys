@@ -42,10 +42,8 @@ WORKDIR /www
 COPY . /www
 COPY ./.env.example /www/
 COPY --from=composer /app/vendor/ /www/vendor/
-RUN chown -R www-data:www-data /www && chmod -R 777 /www
+RUN chown -R www:www /www && chmod -R 777 /www
 
-USER www-data
-
-EXPOSE 80 443
+USER www
 
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]
