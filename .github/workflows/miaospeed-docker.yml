@@ -6,7 +6,7 @@ on:
       tag:
         description: 'Docker image tag,默认为latest'
         required: false
-        default: 'latest'
+        default: 'v4.5.8'
 
 env:
   REGISTRY_GHCR: ghcr.io
@@ -55,8 +55,8 @@ jobs:
 
       - name: Validate Docker tag
         run: |
-          if [[ ! "${{ steps.get-tag.outputs.tag }}" =~ ^v1\.[0-9]+\.[0-9]+$ ]]; then
-          echo "错误：标签格式无效，应为v1.x.x"
+          if [[ ! "${{ steps.get-tag.outputs.tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "错误：标签格式无效，应为v*.*.*"
           exit 1
           fi
 

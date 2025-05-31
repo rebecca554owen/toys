@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入 openppp2 的 tag 名称'
         required: true
-        default: 'v1.7.0'
+        default: 'v2.0.0'
 
 jobs:
   build:
@@ -54,8 +54,8 @@ jobs:
 
     - name: Validate openppp2 tag
       run: |
-        if [[ ! "${{ steps.get-tag.outputs.tag }}" =~ ^v1\.[0-9]+\.[0-9]+$ ]]; then
-          echo "错误：标签格式无效，应为v1.x.x"
+        if [[ ! "${{ steps.get-tag.outputs.tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "错误：标签格式无效，应为v*.*.*"
           exit 1
         fi
 
