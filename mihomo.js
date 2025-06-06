@@ -1,16 +1,16 @@
-// 1. 国内DNS服务器配置
+// 国内DNS服务器配置
 const domesticNameservers = [
   "https://dns.alidns.com/dns-query",  // 阿里
   "https://doh.pub/dns-query"          // 腾讯
 ];
 
-// 2. 国外DNS服务器配置
+// 国外DNS服务器配置
 const foreignNameservers = [
   "https://dns.cloudflare.com/dns-query",  // Cloudflare 
   "https://dns.google/dns-query"           // Google
 ];
 
-// 3. DNS全局配置
+// DNS全局配置
 const dnsConfig = {
   enable: true,
   ipv6: true,
@@ -45,7 +45,7 @@ const dnsConfig = {
   }
 };
 
-// 4. 流量规则配置
+// 流量规则配置
 const rules = [
   // 自定义规则
   "DOMAIN,lan.freewife.online,DIRECT",
@@ -66,7 +66,7 @@ const rules = [
   "MATCH,节点选择"
 ];
 
-// 5. 代理提供者配置
+// 代理提供者配置
 const proxyProviders = {
   "provider1": {
     type: "http",
@@ -81,7 +81,7 @@ const proxyProviders = {
   }
 };
 
-// 6. 代理分类正则表达式定义
+// 代理分类正则表达式定义
 const hongKongRegex = /香港|HK|Hong|🇭🇰/i;
 const taiwanRegex = /台湾|TW|Taiwan|Wan|🇨🇳|🇹🇼/i;
 const singaporeRegex = /新加坡|狮城|SG|Singapore|🇸🇬/i;
@@ -90,14 +90,14 @@ const americaRegex = /美国|US|United States|America|🇺🇸/;
 const othersRegex = /^(?!.*(?:香港|HK|Hong|🇭🇰|台湾|TW|Taiwan|Wan|🇨🇳|🇹🇼|新加坡|SG|Singapore|狮城|🇸🇬|日本|JP|Japan|🇯🇵|美国|US|States|America|🇺🇸|自动|故障|流量|官网|套餐|机场|订阅|年|月)).*$/;
 const allRegex = /^(?!.*(?:自动|故障|流量|官网|套餐|机场|订阅|年|月|失联|频道)).*$/;
 
-// 7. 根据正则表达式获取代理
+// 根据正则表达式获取代理
 function getProxiesByRegex(config, regex) {
   return config.proxies
     .filter((e) => regex.test(e.name))
     .map((e) => e.name);
 }
 
-// 8. 代理组通用配置
+// 代理组通用配置
 const groupBaseOption = {
   interval: 300,
   timeout: 1000,
@@ -107,37 +107,7 @@ const groupBaseOption = {
   hidden: false
 };
 
-// 9. 更新代理组配置
-function updateDialerProxyGroup(config, groupMappings) {
-  groupMappings.forEach(([groupName, dialerProxyName, targetGroupName]) => {
-      // 1. 查找源代理组（如"出口节点"）
-      const sourceGroup = config["proxy-groups"].find(g => g.name === groupName);
-      
-      if (sourceGroup) {
-          // 2. 为源组下所有代理（除DIRECT外）添加 dialer-proxy （如"前置节点"）
-          sourceGroup.proxies.forEach(proxyName => {
-              if (proxyName !== "DIRECT") {
-                  const proxy = (config.proxies || []).find(p => p.name === proxyName);
-                  if (proxy) {
-                      proxy["dialer-proxy"] = dialerProxyName;
-                  }
-              }
-          });
-
-          // 3. 修改目标组（如"relay"组）
-          const targetGroupIndex = config["proxy-groups"].findIndex(g => g.name === targetGroupName);
-          if (targetGroupIndex !== -1) {
-              config["proxy-groups"][targetGroupIndex] = {
-                  name: targetGroupName,      // 保持原组名
-                  type: "select",             // 强制改为选择模式
-                  proxies: [groupName]        // 仅保留源组（如"出口节点"）
-              };
-          }
-      }
-  });
-}
-
-// 10. 主函数
+// 主函数
 function main(config) {
   // 添加 proxy-providers 配置
   config["proxy-providers"] = proxyProviders;
@@ -159,6 +129,7 @@ function main(config) {
   const japanProxies = getProxiesByRegex(config, japanRegex);
   const americaProxies = getProxiesByRegex(config, americaRegex);
   const othersProxies = getProxiesByRegex(config, othersRegex);
+  const allProxies = getProxiesByRegex(config, allRegex);
 
   // 代理组配置
   config["proxy-groups"] = [
@@ -182,15 +153,14 @@ function main(config) {
       ...groupBaseOption,
       name: "出口节点",
       type: "select",
-      proxies: [],
-      "include-all": true,
+      proxies: allProxies.length > 0? allProxies : ["DIRECT"],
       icon: "https://fastly.jsdelivr.net/gh/clash-verge-rev/clash-verge-rev.github.io@main/docs/assets/icons/link.svg"
     },
     {
       ...groupBaseOption,
       name: "relay",
-      type: "relay",
-      proxies: ["前置节点", "出口节点"],
+      type: "select",
+      proxies: ["出口节点"],
       hidden: true,
       icon: "https://fastly.jsdelivr.net/gh/clash-verge-rev/clash-verge-rev.github.io@main/docs/assets/icons/adjust.svg"
     },
@@ -273,11 +243,6 @@ function main(config) {
       proxies: othersProxies.length > 0 ? othersProxies : ["DIRECT"]
     }
   ];
-
-  // 为出口节点添加 dialer-proxy 并调整 relay 组   
-  updateDialerProxyGroup(config, [     
-    ["出口节点", "前置节点", "relay"]   
-  ]);
   
   // 覆盖原配置中 rules 配置
   config["rules"] = rules;
@@ -290,21 +255,13 @@ function main(config) {
 
 }
 
-// 11. 合并后的完整功能流程
+// 合并后的完整功能流程
 function generateFinalConfig(rawConfig) {
   try {
-    // 1. 执行主配置生成
+    // 执行主配置生成
     const processedConfig = main(rawConfig);
-    
-    // 2. 验证必要组是否存在
-    const requiredGroups = ["出口节点", "前置节点", "relay"];
-    requiredGroups.forEach(group => {
-      if (!processedConfig["proxy-groups"].some(g => g.name === group)) {
-        throw new Error(`缺少必要代理组: ${group}`);
-      }
-    });
 
-    // 3. 最终配置检查
+    // 配置检查
     if (!processedConfig.dns || !processedConfig.rules) {
       throw new Error("DNS 或 rules 配置生成失败");
     }
