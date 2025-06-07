@@ -55,68 +55,10 @@ jobs:
 
       - name: Validate Docker tag
         run: |
-          if [[ ! "${{ steps.get-tag.outputs.tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-          echo "错误：标签格式无效，应为v*.*.*"
-          exit 1
-          fi
-
-      - name: Download and prepare binaries
-        shell: bash
-        run: |
-          mkdir -p openppp/opt
-          cd openppp/opt
-
-          # 根据架构设置文件名
-          case "${{ matrix.platform_name }}" in
-            linux-amd64)
-              normal_suffix="linux-amd64"
-              io_suffix="linux-amd64-io-uring"
-              ;;
-            linux-arm64)
-              normal_suffix="linux-aarch64"
-              io_suffix="linux-aarch64-io-uring"
-              ;;
-            *)
-              echo "不支持的平台: ${{ matrix.platform_name }}"
-              exit 1
-              ;;
-          esac
-
-          tag=${{ steps.get-tag.outputs.tag }}
-
-          # 下载正常版本（强制要求存在）
-          if [ "$tag" = "latest" ]; then
-            wget "https://github.com/rebecca554owen/toys/releases/latest/download/openppp2-${normal_suffix}.zip" -O normal.zip
-          else
-            wget "https://github.com/rebecca554owen/toys/releases/download/${tag}/openppp2-${normal_suffix}.zip" -O normal.zip
-          fi
-
-          # 尝试下载io版本（可选）
-          if [ "$tag" = "latest" ]; then
-            wget "https://github.com/rebecca554owen/toys/releases/latest/download/openppp2-${io_suffix}.zip" -O io.zip || echo "::notice::跳过不存在的IO版本"
-          else
-            wget "https://github.com/rebecca554owen/toys/releases/download/${tag}/openppp2-${io_suffix}.zip" -O io.zip || echo "::notice::跳过不存在的IO版本"
-          fi
-
-          # 处理正常版本
-          if file normal.zip | grep -q "Zip archive data"; then
-            unzip normal.zip -d .
-            rm normal.zip
-          else
-            echo "::error::正常版本ZIP文件损坏或格式错误"
+          tag="${{ steps.get-tag.outputs.tag }}"
+          if [[ "$tag" != "latest" && ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "错误：标签格式无效，应为v*.*.*或latest"
             exit 1
-          fi
-
-          # 处理io版本（如果存在）
-          if [ -f io.zip ]; then
-            if file io.zip | grep -q "Zip archive data"; then
-              mkdir -p io
-              unzip io.zip -d io/
-              rm io.zip
-            else
-              echo "::warning::IO版本ZIP文件损坏，已忽略"
-              rm -f io.zip
-            fi
           fi
 
       - name: Build and push platform-specific images
@@ -128,6 +70,8 @@ jobs:
           platforms: ${{ matrix.platform }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ steps.get-tag.outputs.tag }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.get-tag.outputs.tag }}
 
