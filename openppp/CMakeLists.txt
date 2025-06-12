@@ -6,7 +6,7 @@ PROJECT(${NAME} C CXX) # CMAKE_CURRENT_SOURCE_DIR
 
 # C/CXX compiler configurations.
 SET(CMAKE_C_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-implicit-function-declaration")
-SET(CMAKE_CXX_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-inconsistent-missing-override -Wno-pointer-bool-conversion -Wno-unsequenced -Wno-null-dereference -Wno-gnu-variable-sized-type-not-at-end -Wno-tautological-undefined-compare -Wno-deprecated-declarations")
+SET(CMAKE_CXX_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-inconsistent-missing-override -Wno-pointer-bool-conversion -Wno-unsequenced -Wno-null-dereference -Wno-gnu-variable-sized-type-not-at-end -Wno-tautological-undefined-compare -Wno-deprecated-declarations -Wno-shift-count-overflow")
 
 # Configure predefined compilation macros.
 # ADD_DEFINITIONS(-DANCIL_FD_BUFFER_STRUCT)
@@ -69,6 +69,27 @@ ENDIF()
 INCLUDE(CheckCXXCompilerFlag)
 CHECK_CXX_COMPILER_FLAG("-std=c++17" COMPILER_SUPPORTS_CXX17)
 CHECK_CXX_COMPILER_FLAG("-std=c++1z" COMPILER_SUPPORTS_CXX1Z)
+
+# If the current compiler environment is detected to support AES.
+SET(__AES_NI__ FALSE)
+IF(__AES_NI__)
+    # Add in the compiler flag section.
+    ADD_COMPILE_OPTIONS(-maes -msse2 -mpclmul)
+
+    # Add the AES_NI compiler macro.
+    ADD_DEFINITIONS(-D__AES_NI__)
+
+    # Additional options for the old version of GCC.
+    IF(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 8.0)
+        ADD_COMPILE_OPTIONS(-march=westmere)
+        ADD_COMPILE_OPTIONS(-fno-stack-protector)
+    ENDIF()
+
+    # AES is enabled, the source code of AES/128/256/CFB related to the library needs to be compiled.
+    FILE(GLOB_RECURSE AES_NI_SOURCE_FILES 
+        ${PROJECT_SOURCE_DIR}/common/aesni/impl/*.c 
+        ${PROJECT_SOURCE_DIR}/common/aesni/impl/*.cpp)
+ENDIF()
 
 # According to the type of operating system to determine whether you need to check whether the compiler supports C/C++17, 
 # On the MACOS system, the following check code is invalid, so directly specify the standard version of C/C++, 
@@ -146,15 +167,16 @@ FILE(GLOB_RECURSE SOURCE_FILES
     ${PROJECT_SOURCE_DIR}/common/chnroutes2/*.cpp 
     ${PROJECT_SOURCE_DIR}/common/json/src/*.cpp 
     ${PROJECT_SOURCE_DIR}/common/libtcpip/*.cpp 
-
+    ${PROJECT_SOURCE_DIR}/common/dnslib/*.cpp 
     ${PROJECT_SOURCE_DIR}/common/unix/*.c 
     ${PROJECT_SOURCE_DIR}/common/unix/*.cpp 
+    ${PROJECT_SOURCE_DIR}/common/aesni/aes.cpp
 
     ${PROJECT_SOURCE_DIR}/ppp/*.c 
     ${PROJECT_SOURCE_DIR}/ppp/*.cpp)
 
 # Add the compiled output binary files.
-ADD_EXECUTABLE(${NAME} ${SOURCE_FILES} ${PLATFORM_SOURCE_FILES})
+ADD_EXECUTABLE(${NAME} ${SOURCE_FILES} ${PLATFORM_SOURCE_FILES} ${AES_NI_SOURCE_FILES})
 
 # Set the compilation output files path.
 SET(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
@@ -175,6 +197,7 @@ IF(PLATFORM_SYSTEM_DARWIN)
         ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_coroutine.a 
         ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_thread.a 
         ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_context.a 
+        ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_regex.a 
         ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_filesystem.a) 
 ELSEIF(PLATFORM_COMPILER_CLANG)
     SET(BUILD_SHARED_LIBS ON)
@@ -192,7 +215,8 @@ ELSEIF(PLATFORM_COMPILER_CLANG)
         libboost_system.a
         libboost_coroutine.a 
         libboost_thread.a 
-        libboost_context.a 
+        libboost_context.a
+        libboost_regex.a 
         libboost_filesystem.a) 
 ELSE()
     TARGET_LINK_LIBRARIES(${NAME} 
@@ -210,5 +234,6 @@ ELSE()
         libboost_coroutine.a 
         libboost_thread.a 
         libboost_context.a 
+        libboost_regex.a
         libboost_filesystem.a) 
 ENDIF()

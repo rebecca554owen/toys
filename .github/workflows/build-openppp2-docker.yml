@@ -65,7 +65,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./openppp/test.Dockerfile
+          file: ./openppp/ppp.Dockerfile
           push: true
           platforms: ${{ matrix.platform }}
           cache-from: type=gha

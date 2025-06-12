@@ -1,8 +1,8 @@
 # 多阶段构建 - 下载阶段
-FROM ubuntu:24.04 AS downloader
+FROM ubuntu:latest AS downloader
 
 # 构建参数
-ARG VERSION=v2.0.0
+ARG VERSION=latest
 ARG TARGETARCH
 
 # 设置工作目录
@@ -38,9 +38,17 @@ RUN set -ex && \
     fi && \
     # 尝试下载io版本（可选）
     if [ "${VERSION}" = "latest" ]; then \
-        wget "https://github.com/rebecca554owen/toys/releases/latest/download/openppp2-${io_suffix}.zip" -O io.zip || echo "跳过不存在的IO版本"; \
+        wget "https://github.com/rebecca554owen/toys/releases/latest/download/openppp2-${io_suffix}.zip" -O io.zip || true; \
     else \
-        wget "https://github.com/rebecca554owen/toys/releases/download/${VERSION}/openppp2-${io_suffix}.zip" -O io.zip || echo "跳过不存在的IO版本"; \
+        wget "https://github.com/rebecca554owen/toys/releases/download/${VERSION}/openppp2-${io_suffix}.zip" -O io.zip || true; \
+    fi && \
+    # 尝试下载simd版本（可选） \
+    if [ "${VERSION}" = "latest" ]; then \
+        wget "https://github.com/rebecca554owen/toys/releases/latest/download/openppp2-${normal_suffix}-simd.zip" -O normal_simd.zip || true; \
+        wget "https://github.com/rebecca554owen/toys/releases/latest/download/openppp2-${io_suffix}-simd.zip" -O io_simd.zip || true; \
+    else \
+        wget "https://github.com/rebecca554owen/toys/releases/download/${VERSION}/openppp2-${normal_suffix}-simd.zip" -O normal_simd.zip || true; \
+        wget "https://github.com/rebecca554owen/toys/releases/download/${VERSION}/openppp2-${io_suffix}-simd.zip" -O io_simd.zip || true; \
     fi && \
     # 处理正常版本
     if file normal.zip | grep -q "Zip archive data"; then \
@@ -60,16 +68,39 @@ RUN set -ex && \
             echo "IO版本ZIP文件损坏，已忽略" && \
             rm -f io.zip; \
         fi; \
+    fi && \
+    # 处理simd版本（如果存在）
+    if [ -f normal_simd.zip ]; then \
+        if file normal_simd.zip | grep -q "Zip archive data"; then \
+            mkdir -p /opt/simd && \
+            unzip normal_simd.zip -d /opt/simd/ && \
+            rm normal_simd.zip; \
+        else \
+            echo "SIMD版本ZIP文件损坏，已忽略" && \
+            rm -f normal_simd.zip; \
+        fi; \
+    fi && \
+    # 处理io-simd版本（如果存在）
+    if [ -f io_simd.zip ]; then \
+        if file io_simd.zip | grep -q "Zip archive data"; then \
+            mkdir -p /opt/io-simd && \
+            unzip io_simd.zip -d /opt/io-simd/ && \
+            rm io_simd.zip; \
+        else \
+            echo "IO-SIMD版本ZIP文件损坏，已忽略" && \
+            rm -f io_simd.zip; \
+        fi; \
     fi
 
 # 多阶段构建 - 运行阶段
-FROM ubuntu:24.04
+FROM ubuntu:22.04
 
 # 设置工作目录
 WORKDIR /opt
 
 # 环境变量
-ENV USE_IO=false
+ENV ENABLE_IO=false
+ENV ENABLE_SIMD=false
 
 # 安装运行时依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -86,19 +117,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 从下载阶段复制二进制文件
 COPY --from=downloader /opt/ /opt/
 
-# 生成启动脚本并设置执行权限
-RUN echo '#!/bin/sh\n\
-echo "检查IO版本可用性..."\n\
-if [ -f /opt/io/ppp ] && [ "$USE_IO" = "true" ]; then\n\
-    echo "检测到IO版本且USE_IO=true，使用IO版本启动"\n\
-    exec /opt/io/ppp "$@"\n\
-else\n\
-    echo "使用标准版本启动"\n\
-    exec /opt/ppp "$@"\n\
-fi' > /opt/entrypoint.sh \
-    && chmod +x /opt/ppp \
-    && ( [ -f /opt/io/ppp ] && chmod +x /opt/io/ppp || true ) \
-    && chmod +x /opt/entrypoint.sh
+# 复制启动脚本并设置执行权限
+COPY openppp/entrypoint.sh /opt/entrypoint.sh
+RUN chmod +x /opt/entrypoint.sh
 
 # 设置入口点
 ENTRYPOINT ["/opt/entrypoint.sh"]
