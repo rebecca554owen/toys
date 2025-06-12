@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入 openppp2 的 tag 名称'
         required: true
-        default: 'v2.7.0'
+        default: 'v2.8.0'
 
 jobs:
   build:
@@ -20,6 +20,9 @@ jobs:
           - linux/aarch64
         ENABLE_IO: [true, false]
         ENABLE_SIMD: [true, false]
+        exclude:
+          - platform: linux/aarch64
+            ENABLE_SIMD: true
         include:
           - platform: linux/amd64
             platform_name: linux-amd64

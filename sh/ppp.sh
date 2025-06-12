@@ -2,27 +2,20 @@
 
 ppp_dir="/opt/ppp" # 定义ppp安装目录
 
-# 检测操作系统
-OS=""
-if [ -f /etc/redhat-release ]; then
-    OS="CentOS"
-elif [ -f /etc/os-release ]; then
-    . /etc/os-release
-    OS=$ID
-fi
+. /etc/os-release
 
 # 安装依赖
 function install_dependencies() {
-    echo "检测到操作系统：$OS"
+    echo "检测到操作系统：$ID $VERSION_ID"
     
-    case "$OS" in
+    case "$ID" in
         ubuntu | debian)
             echo "更新系统和安装依赖 (Debian/Ubuntu)..."
-            apt update && apt install -y sudo screen unzip wget uuid-runtime jq
+            apt update && apt install -y file jq screen sudo unzip uuid-runtime wget
             ;;
         *)
-            echo "不支持的操作系统"
-            return 1
+            echo "不支持的操作系统: $ID。此脚本目前仅支持 Debian/Ubuntu 系统。"
+            exit 1
             ;;
     esac
 }
@@ -54,9 +47,9 @@ function get_version_and_download() {
 
         # 根据架构设定候选资产名称（io_uring优化版在前，标准版在后）
         if [[ "$arch" == "x86_64" ]]; then
-            assets=("openppp2-linux-amd64-io-uring.zip" "openppp2-linux-amd64.zip")
+            assets=("openppp2-linux-amd64-io-uring.zip" "openppp2-linux-amd64.zip" "openppp2-linux-amd64-simd.zip" "openppp2-linux-amd64-io-uring-simd.zip")
         elif [[ "$arch" == "aarch64" ]]; then
-            assets=("openppp2-linux-aarch64-io-uring.zip" "openppp2-linux-aarch64.zip")
+            assets=("openppp2-linux-aarch64-io-uring.zip" "openppp2-linux-aarch64.zip" "openppp2-linux-aarch64-simd.zip" "openppp2-linux-aarch64-io-uring-simd.zip")
         else
             echo "不支持的架构: $arch"
             exit 1
@@ -80,17 +73,44 @@ function get_version_and_download() {
         done
 
         # 内核版本检查与版本选择
-        if [[ "$can_use_io" == true ]]; then
-            read -p "是否要使用 io_uring 优化版本？（回车默认使用标准版本）[y/N] " use_io
-            use_io=$(echo "$use_io" | tr '[:upper:]' '[:lower:]')
-            if [[ "$use_io" != "y" ]]; then
-                selected_asset="${assets[1]}"
-            else
-                selected_asset="${assets[0]}"
-            fi
-        else
-            selected_asset="${assets[1]}"  # 强制使用标准版
+        echo "请选择要下载的版本类型:"
+        echo "1) 标准版 (Normal)"
+        echo "2) IO_URING 优化版 (IO-URING)"
+        echo "3) SIMD 优化版 (SIMD)"
+        echo "4) IO_URING + SIMD 优化版 (IO-URING-SIMD)"
+        read -p "输入选择 (1-4，回车默认使用标准版): " version_type
+        version_type=${version_type:-1}
+
+        if [[ "$can_use_io" == false ]]; then
+            echo "当前内核版本不支持 IO_URING，将使用标准版或 SIMD 优化版。"
         fi
+
+        case "$version_type" in
+            1)
+                selected_asset="${assets[1]}"
+                ;;
+            2)
+                if [[ "$can_use_io" == true ]]; then
+                    selected_asset="${assets[0]}"
+                else
+                    selected_asset="${assets[1]}"
+                fi
+                ;;
+            3)
+                selected_asset="${assets[2]}"
+                ;;
+            4)
+                if [[ "$can_use_io" == true ]]; then
+                    selected_asset="${assets[3]}"
+                else
+                    selected_asset="${assets[2]}"
+                fi
+                ;;
+            *)
+                echo "无效选择，将使用标准版。"
+                selected_asset="${assets[1]}"
+                ;;
+        esac
 
         # 获取对应版本的下载链接
         download_url=$(echo "$release_info" | jq -r --arg name "$selected_asset" '.assets[] | select(.name == $name) | .browser_download_url')
@@ -100,9 +120,13 @@ function get_version_and_download() {
 
     # 统一处理下载和解压
     echo "下载文件中..."
-    wget "$download_url"
+    wget "$download_url" -O openppp2.zip
     echo "解压下载的文件..."
-    unzip -o '*.zip' -x 'appsettings.json' && rm *.zip
+    if file openppp2.zip | grep -q "Zip archive data"; then
+        unzip -o openppp2.zip -x 'appsettings.json' && rm openppp2.zip
+    else
+        echo "下载的ZIP文件损坏或格式错误" && exit 1
+    fi
     chmod +x ppp
 }
 
@@ -246,16 +270,15 @@ function edit_config_item() {
         echo "配置文件不存在"
         return 1
     fi
-    
-    view_config
-    
     echo -e "\n可配置项："
-    echo "1) 接口IP"
-    echo "2) 公网IP"
-    echo "3) 监听端口"
-    echo "4) 并发数"
-    echo "5) 客户端GUID"
-    read -p "请选择要修改的配置项 (1-5): " choice
+    echo "1) 接口IP (当前: $(jq -r '.ip.interface' ${ppp_config}))"
+    echo "2) 公网IP (当前: $(jq -r '.ip.public' ${ppp_config}))"
+    echo "3) 监听端口 (当前: $(jq -r '.tcp.listen.port' ${ppp_config}))"
+    echo "4) 并发数 (当前: $(jq -r '.concurrent' ${ppp_config}))"
+    echo "5) 客户端GUID (当前: $(jq -r '.client.guid' ${ppp_config}))"
+    echo "6) key.protocol (当前: $(jq -r '.key.protocol' ${ppp_config}))"
+    echo "7) key.transport (当前: $(jq -r '.key.transport' ${ppp_config}))"
+    read -p "请选择要修改的配置项 (1-7): " choice
     
     case $choice in
         1)
@@ -277,6 +300,38 @@ function edit_config_item() {
         5)
             read -p "请输入新的客户端GUID: " new_value
             jq ".client.guid = \"${new_value}\"" "${ppp_config}" > tmp.json && mv tmp.json "${ppp_config}"
+            ;;
+        6)
+            echo "请选择新的 key.protocol 值:"
+            echo "  1) aes-128-cfb"
+            echo "  2) aes-256-cfb"
+            echo "  3) simd-aes-128-cfb"
+            echo "  4) simd-aes-256-cfb"
+            read -p "输入选择 (1-4): " protocol_choice
+            case $protocol_choice in
+                1) new_value="aes-128-cfb" ;;
+                2) new_value="aes-256-cfb" ;;
+                3) new_value="simd-aes-128-cfb" ;;
+                4) new_value="simd-aes-256-cfb" ;;
+                *) echo "无效选择，将不修改 key.protocol"; return 1 ;;
+            esac
+            jq ".key.protocol = \"${new_value}\"" "${ppp_config}" > tmp.json && mv tmp.json "${ppp_config}"
+            ;;
+        7)
+            echo "请选择新的 key.transport 值:"
+            echo "  1) aes-128-cfb"
+            echo "  2) aes-256-cfb"
+            echo "  3) simd-aes-128-cfb"
+            echo "  4) simd-aes-256-cfb"
+            read -p "输入选择 (1-4): " transport_choice
+            case $transport_choice in
+                1) new_value="aes-128-cfb" ;;
+                2) new_value="aes-256-cfb" ;;
+                3) new_value="simd-aes-128-cfb" ;;
+                4) new_value="simd-aes-256-cfb" ;;
+                *) echo "无效选择，将不修改 key.transport"; return 1 ;;
+            esac
+            jq ".key.transport = \"${new_value}\"" "${ppp_config}" > tmp.json && mv tmp.json "${ppp_config}"
             ;;
         *)
             echo "无效选择"
