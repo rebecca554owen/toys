@@ -1,151 +1,190 @@
 #!/bin/bash
 
-ppp_dir="/opt/ppp" # 定义ppp安装目录
+# 全局配置
+PPP_DIR="/opt/ppp"
+CONFIG_FILE="${PPP_DIR}/appsettings.json"
+SERVICE_FILE="/etc/systemd/system/ppp.service"
+GITHUB_REPO="rebecca554owen/toys"
+DEFAULT_CONFIG_URL="https://raw.githubusercontent.com/liulilittle/openppp2/main/appsettings.json"
 
-. /etc/os-release
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+# 初始化系统信息
+function init_system_info() {
+    # 加载OS信息
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+    else
+        echo -e "${RED}错误: 无法确定操作系统类型${NC}"
+        exit 1
+    fi
+
+    # 获取系统架构和内核版本
+    ARCH=$(uname -m)
+    KERNEL_VERSION=$(uname -r)
+    echo -e "${GREEN}系统信息: ${ID} ${VERSION_ID}, 架构: ${ARCH}, 内核: ${KERNEL_VERSION}${NC}"
+}
 
 # 安装依赖
 function install_dependencies() {
-    echo "检测到操作系统：$ID $VERSION_ID"
+    echo -e "${YELLOW}安装系统依赖...${NC}"
     
     case "$ID" in
-        ubuntu | debian)
-            echo "更新系统和安装依赖 (Debian/Ubuntu)..."
+        ubuntu|debian)
             apt update && apt install -y file jq screen sudo unzip uuid-runtime wget
             ;;
         *)
-            echo "不支持的操作系统: $ID。此脚本目前仅支持 Debian/Ubuntu 系统。"
+            echo -e "${RED}不支持的操作系统: ${ID}${NC}"
             exit 1
             ;;
     esac
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}依赖安装失败${NC}"
+        exit 1
+    fi
 }
 
-# 获取版本、下载和解压文件
-function get_version_and_download() {
-    # 获取系统信息
-    kernel_version=$(uname -r)
-    arch=$(uname -m)
-    echo "系统架构: $arch, 内核版本: $kernel_version"
-
-    # 判断内核版本是否满足使用 io-uring 的条件
-    compare_kernel_version=$(echo -e "5.10\n$kernel_version" | sort -V | head -n1)
-    can_use_io=$([[ "$compare_kernel_version" == "5.10" && "$kernel_version" != "5.10" ]] && echo true || echo false)
-
-    read -p "是否使用默认下载地址？[Y/n]: " use_default
-    use_default=$(echo "$use_default" | tr '[:upper:]' '[:lower:]')
-
-    if [[ "$use_default" == "n" || "$use_default" == "no" ]]; then
-        echo "请输入自定义的下载地址:"
-        read download_url
+# 检查IO_URING支持
+function check_io_uring_support() {
+    local major=$(echo $KERNEL_VERSION | cut -d. -f1)
+    local minor=$(echo $KERNEL_VERSION | cut -d. -f2)
+    
+    # 内核版本 >= 5.10 支持IO_URING
+    if [ $major -gt 5 ] || { [ $major -eq 5 ] && [ $minor -ge 10 ]; }; then
+        return 0
     else
-        # 先获取版本信息再处理架构支持
-        latest_version=$(curl -s https://api.github.com/repos/rebecca554owen/toys/releases/latest | jq -r '.tag_name')
-        echo "当前最新版本: $latest_version"
-        
-        read -p "请输入要下载的版本号（回车默认使用最新版本 $latest_version）： " version
-        version=${version:-$latest_version}
-
-        # 根据架构设定候选资产名称（io_uring优化版在前，标准版在后）
-        if [[ "$arch" == "x86_64" ]]; then
-            assets=("openppp2-linux-amd64-io-uring.zip" "openppp2-linux-amd64.zip" "openppp2-linux-amd64-simd.zip" "openppp2-linux-amd64-io-uring-simd.zip")
-        elif [[ "$arch" == "aarch64" ]]; then
-            assets=("openppp2-linux-aarch64-io-uring.zip" "openppp2-linux-aarch64.zip" "openppp2-linux-aarch64-simd.zip" "openppp2-linux-aarch64-io-uring-simd.zip")
-        else
-            echo "不支持的架构: $arch"
-            exit 1
-        fi
-
-        # 获取对应版本的发布信息
-        if [[ "$version" == "$latest_version" ]]; then
-            release_info=$(curl -s https://api.github.com/repos/rebecca554owen/toys/releases/latest)
-        else
-            release_info=$(curl -s "https://api.github.com/repos/rebecca554owen/toys/releases/tags/$version")
-        fi
-
-        [[ -z "$release_info" ]] && { echo "获取版本 $version 的发布信息失败，请检查版本号是否正确。"; exit 1; }
-
-        # selected_asset 用于记录最终选择的构建文件名称
-        # 通过遍历候选资产列表，找到第一个存在的有效下载链接
-        selected_asset=""
-        for asset in "${assets[@]}"; do
-            download_url=$(echo "$release_info" | jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .browser_download_url')
-            [[ -n "$download_url" && "$download_url" != "null" ]] && { selected_asset=$asset; break; }
-        done
-
-        # 内核版本检查与版本选择
-        echo "请选择要下载的版本类型:"
-        echo "1) 标准版 (Normal)"
-        echo "2) IO_URING 优化版 (IO-URING)"
-        echo "3) SIMD 优化版 (SIMD)"
-        echo "4) IO_URING + SIMD 优化版 (IO-URING-SIMD)"
-        read -p "输入选择 (1-4，回车默认使用标准版): " version_type
-        version_type=${version_type:-1}
-
-        if [[ "$can_use_io" == false ]]; then
-            echo "当前内核版本不支持 IO_URING，将使用标准版或 SIMD 优化版。"
-        fi
-
-        case "$version_type" in
-            1)
-                selected_asset="${assets[1]}"
-                ;;
-            2)
-                if [[ "$can_use_io" == true ]]; then
-                    selected_asset="${assets[0]}"
-                else
-                    selected_asset="${assets[1]}"
-                fi
-                ;;
-            3)
-                selected_asset="${assets[2]}"
-                ;;
-            4)
-                if [[ "$can_use_io" == true ]]; then
-                    selected_asset="${assets[3]}"
-                else
-                    selected_asset="${assets[2]}"
-                fi
-                ;;
-            *)
-                echo "无效选择，将使用标准版。"
-                selected_asset="${assets[1]}"
-                ;;
-        esac
-
-        # 获取对应版本的下载链接
-        download_url=$(echo "$release_info" | jq -r --arg name "$selected_asset" '.assets[] | select(.name == $name) | .browser_download_url')
-        [[ -z "$download_url" ]] && { echo "无法获取到构建文件的下载链接。"; exit 1; }
-        echo "选择的构建文件: $selected_asset"  # 输出最终确定的构建文件名称
+        return 1
     fi
+}
 
-    # 统一处理下载和解压
-    echo "下载文件中..."
-    wget "$download_url" -O openppp2.zip
-    echo "解压下载的文件..."
-    if file openppp2.zip | grep -q "Zip archive data"; then
-        unzip -o openppp2.zip -x 'appsettings.json' && rm openppp2.zip
+# 获取最新版本
+function get_latest_version() {
+    echo -e "${YELLOW}获取最新版本信息...${NC}"
+    local release_info=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest")
+    local latest_version=$(echo "$release_info" | jq -r '.tag_name')
+    
+    if [ -z "$latest_version" ] || [ "$latest_version" == "null" ]; then
+        echo -e "${RED}获取最新版本失败${NC}"
+        return 1
+    fi
+    
+    echo "$latest_version"
+}
+
+# 下载和解压PPP
+function download_and_extract() {
+    local version=$1
+    local asset_name=$2
+    
+    echo -e "${YELLOW}下载版本: ${version} (${asset_name})${NC}"
+    
+    # 获取下载URL
+    local release_info
+    if [ "$version" == "$(get_latest_version)" ]; then
+        release_info=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest")
     else
-        echo "下载的ZIP文件损坏或格式错误" && exit 1
+        release_info=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${version}")
     fi
+    
+    local download_url=$(echo "$release_info" | jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .browser_download_url')
+    
+    if [ -z "$download_url" ] || [ "$download_url" == "null" ]; then
+        echo -e "${RED}无法获取下载链接${NC}"
+        return 1
+    fi
+    
+    # 下载文件
+    echo -e "${YELLOW}正在下载: ${download_url}${NC}"
+    if ! wget -q --show-progress "$download_url" -O openppp2.zip; then
+        echo -e "${RED}下载失败${NC}"
+        return 1
+    fi
+    
+    # 验证和解压
+    if ! file openppp2.zip | grep -q "Zip archive data"; then
+        echo -e "${RED}下载的文件不是有效的ZIP文件${NC}"
+        return 1
+    fi
+    
+    echo -e "${YELLOW}解压文件中...${NC}"
+    unzip -o openppp2.zip -x 'appsettings.json' && rm -f openppp2.zip
     chmod +x ppp
+    
+    return 0
+}
+
+# 选择下载版本
+function select_download_version() {
+    local version=$1
+    local use_io_uring=$2
+    
+    # 根据架构确定可用版本
+    local assets=()
+    if [ "$ARCH" == "x86_64" ]; then
+        assets=(
+            "openppp2-linux-amd64-io-uring-simd.zip"
+            "openppp2-linux-amd64-io-uring.zip"
+            "openppp2-linux-amd64-simd.zip"
+            "openppp2-linux-amd64.zip"
+        )
+    elif [ "$ARCH" == "aarch64" ]; then
+        assets=(
+            "openppp2-linux-aarch64-io-uring-simd.zip"
+            "openppp2-linux-aarch64-io-uring.zip"
+            "openppp2-linux-aarch64-simd.zip"
+            "openppp2-linux-aarch64.zip"
+        )
+    else
+        echo -e "${RED}不支持的架构: ${ARCH}${NC}"
+        return 1
+    fi
+    
+    # 显示版本选择菜单
+    echo -e "\n${GREEN}请选择要下载的版本类型:${NC}"
+    echo "1) IO_URING + SIMD 优化版 (最高性能)"
+    echo "2) IO_URING 优化版"
+    echo "3) SIMD 优化版"
+    echo "4) 标准版"
+    echo "0) 取消"
+
+    local choice
+    read -p "输入选择 (0-4)，默认 1: " choice
+    choice=${choice:-1}
+    
+    case $choice in
+        1) download_and_extract "$version" "${assets[0]}" ;;
+        2) download_and_extract "$version" "${assets[1]}" ;;
+        3) download_and_extract "$version" "${assets[2]}" ;;
+        4) download_and_extract "$version" "${assets[3]}" ;;
+        *) return 1 ;;
+    esac
+    
+    return $?
 }
 
 # 配置系统服务
 function configure_service() {
-    local mode_choice=$1
+    local mode=$1
+    
+    echo -e "${YELLOW}配置系统服务...${NC}"
+    
     local exec_start
     local restart_policy
-
-    if [[ "$mode_choice" == "2" ]]; then
-        exec_start="/usr/bin/screen -DmS ppp $ppp_dir/ppp --mode=client --tun-flash=yes --tun-ssmt=4/mq --tun-host=no"
+    
+    if [ "$mode" == "client" ]; then
+        exec_start="/usr/bin/screen -DmS ppp ${PPP_DIR}/ppp --mode=client --tun-flash=yes --tun-ssmt=4/mq --tun-host=no"
         restart_policy="no"
     else
-        exec_start="/usr/bin/screen -DmS ppp $ppp_dir/ppp --mode=server --tun-flash"
+        exec_start="/usr/bin/screen -DmS ppp ${PPP_DIR}/ppp --mode=server --tun-flash"
         restart_policy="always"
     fi
-
-    echo "配置系统服务..."
-    cat > /etc/systemd/system/ppp.service << EOF
+    
+    cat > "$SERVICE_FILE" << EOF
 [Unit]
 Description=PPP Service with Screen
 After=network.target
@@ -153,253 +192,72 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=$ppp_dir
-ExecStart=$exec_start
-Restart=$restart_policy
+WorkingDirectory=${PPP_DIR}
+ExecStart=${exec_start}
+Restart=${restart_policy}
 RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
 EOF
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}服务配置失败${NC}"
+        return 1
+    fi
+    
+    systemctl daemon-reload
+    return 0
 }
 
-# 安装PPP服务
-function install_ppp() {
-    install_dependencies || return 1
-
-    echo "创建目录并进入..."
-    mkdir -p $ppp_dir
-    cd $ppp_dir
-
-    get_version_and_download
-
-    echo "请选择模式（默认为服务端）："
-    echo "1) 服务端"
-    echo "2) 客户端"
-    read -p "输入选择 (1 或 2，默认为服务端): " mode_choice
-    mode_choice=${mode_choice:-1}
-
-    configure_service "$mode_choice"
-    modify_config
-    start_ppp
-    echo "PPP服务已配置并启动。"
-    show_menu
+# 备份配置文件
+function backup_config() {
+    if [ -f "$CONFIG_FILE" ]; then
+        local timestamp=$(date +%Y%m%d%H%M%S)
+        local backup_file="${CONFIG_FILE}.${timestamp}.bak"
+        cp "$CONFIG_FILE" "$backup_file"
+        echo -e "${GREEN}已备份配置文件到: ${backup_file}${NC}"
+    fi
 }
 
-# 卸载PPP服务
-function uninstall_ppp() {
-    echo "停止并卸载PPP服务..."
-    sudo systemctl stop ppp.service
-    sudo systemctl disable ppp.service
-    sudo rm -f /etc/systemd/system/ppp.service
-    sudo systemctl daemon-reload
-    sudo systemctl reset-failed
-    echo "删除安装文件..."
+# 下载默认配置
+function download_default_config() {
+    echo -e "${YELLOW}下载默认配置文件...${NC}"
+    
+    if ! wget -q "$DEFAULT_CONFIG_URL" -O "$CONFIG_FILE"; then
+        echo -e "${RED}下载默认配置文件失败${NC}"
+        return 1
+    fi
+    
+    return 0
+}
 
-    pids=$(pgrep ppp)
-    if [ -z "$pids" ]; then
-        echo "没有找到PPP进程。"
+# 生成随机GUID
+function generate_guid() {
+    if command -v uuidgen &> /dev/null; then
+        uuidgen
     else
-        echo "找到PPP进程，正在杀死..."
-        kill $pids
-        echo "已发送终止信号到PPP进程。"
+        openssl rand -hex 16 | sed 's/$........$$....$$....$$....$$............$/\1-\2-\3-\4-\5/'
     fi
-
-    sudo rm -rf $ppp_dir
-    echo "PPP服务已完全卸载。"
 }
 
-# 启动PPP服务
-function start_ppp() {
-    sudo systemctl enable ppp.service
-    sudo systemctl daemon-reload
-    sudo systemctl start ppp.service
-    echo "PPP服务已启动。"
-}
-
-# 停止PPP服务
-function stop_ppp() {
-    sudo systemctl stop ppp.service
-    echo "PPP服务已停止。"
-}
-
-# 重启PPP服务
-function restart_ppp() {
-    sudo systemctl daemon-reload
-    sudo systemctl restart ppp.service
-    echo "PPP服务已重启。"
-}
-
-# 更新PPP服务
-function update_ppp() {
-    echo "更新PPP服务中..."
-    cd $ppp_dir
-    get_version_and_download
+# 初始化配置
+function init_config() {
+    backup_config
     
-    echo "正在停止旧服务以替换文件..."
-    stop_ppp
-    
-    echo "启动更新后的PPP服务..."
-    restart_ppp
-    echo "PPP服务已更新并重启。"
-}
-
-# 查看PPP会话
-function view_ppp_session() {
-    echo "查看PPP会话..."
-    screen -r ppp
-    echo "提示：使用 'Ctrl+a d' 来detach会话而不是关闭它。"
-}
-
-# 查看当前配置
-function view_config() {
-    ppp_config="${ppp_dir}/appsettings.json"
-    if [ ! -f "${ppp_config}" ]; then
-        echo "配置文件不存在"
-        return 1
-    fi
-    
-    echo -e "\n当前配置文件内容："
-    jq . "${ppp_config}"
-}
-
-# 编辑特定配置项
-function edit_config_item() {
-    ppp_config="${ppp_dir}/appsettings.json"
-    if [ ! -f "${ppp_config}" ]; then
-        echo "配置文件不存在"
-        return 1
-    fi
-    echo -e "\n可配置项："
-    echo "1) 接口IP (当前: $(jq -r '.ip.interface' ${ppp_config}))"
-    echo "2) 公网IP (当前: $(jq -r '.ip.public' ${ppp_config}))"
-    echo "3) 监听端口 (当前: $(jq -r '.tcp.listen.port' ${ppp_config}))"
-    echo "4) 并发数 (当前: $(jq -r '.concurrent' ${ppp_config}))"
-    echo "5) 客户端GUID (当前: $(jq -r '.client.guid' ${ppp_config}))"
-    echo "6) key.protocol (当前: $(jq -r '.key.protocol' ${ppp_config}))"
-    echo "7) key.transport (当前: $(jq -r '.key.transport' ${ppp_config}))"
-    read -p "请选择要修改的配置项 (1-7): " choice
-    
-    case $choice in
-        1)
-            read -p "请输入新的接口IP: " new_value
-            jq ".ip.interface = \"${new_value}\"" "${ppp_config}" > tmp.json && mv tmp.json "${ppp_config}"
-            ;;
-        2)
-            read -p "请输入新的公网IP: " new_value
-            jq ".ip.public = \"${new_value}\"" "${ppp_config}" > tmp.json && mv tmp.json "${ppp_config}"
-            ;;
-        3)
-            read -p "请输入新的监听端口: " new_value
-            jq ".tcp.listen.port = ${new_value} | .udp.listen.port = ${new_value}" "${ppp_config}" > tmp.json && mv tmp.json "${ppp_config}"
-            ;;
-        4)
-            read -p "请输入新的并发数: " new_value
-            jq ".concurrent = ${new_value}" "${ppp_config}" > tmp.json && mv tmp.json "${ppp_config}"
-            ;;
-        5)
-            read -p "请输入新的客户端GUID: " new_value
-            jq ".client.guid = \"${new_value}\"" "${ppp_config}" > tmp.json && mv tmp.json "${ppp_config}"
-            ;;
-        6)
-            echo "请选择新的 key.protocol 值:"
-            echo "  1) aes-128-cfb"
-            echo "  2) aes-256-cfb"
-            echo "  3) simd-aes-128-cfb"
-            echo "  4) simd-aes-256-cfb"
-            read -p "输入选择 (1-4): " protocol_choice
-            case $protocol_choice in
-                1) new_value="aes-128-cfb" ;;
-                2) new_value="aes-256-cfb" ;;
-                3) new_value="simd-aes-128-cfb" ;;
-                4) new_value="simd-aes-256-cfb" ;;
-                *) echo "无效选择，将不修改 key.protocol"; return 1 ;;
-            esac
-            jq ".key.protocol = \"${new_value}\"" "${ppp_config}" > tmp.json && mv tmp.json "${ppp_config}"
-            ;;
-        7)
-            echo "请选择新的 key.transport 值:"
-            echo "  1) aes-128-cfb"
-            echo "  2) aes-256-cfb"
-            echo "  3) simd-aes-128-cfb"
-            echo "  4) simd-aes-256-cfb"
-            read -p "输入选择 (1-4): " transport_choice
-            case $transport_choice in
-                1) new_value="aes-128-cfb" ;;
-                2) new_value="aes-256-cfb" ;;
-                3) new_value="simd-aes-128-cfb" ;;
-                4) new_value="simd-aes-256-cfb" ;;
-                *) echo "无效选择，将不修改 key.transport"; return 1 ;;
-            esac
-            jq ".key.transport = \"${new_value}\"" "${ppp_config}" > tmp.json && mv tmp.json "${ppp_config}"
-            ;;
-        *)
-            echo "无效选择"
-            return 1
-            ;;
-    esac
-    
-    echo "配置项已更新"
-    restart_ppp
-}
-
-# 修改PPP配置文件
-function modify_config() {
-    ppp_config="${ppp_dir}/appsettings.json"
-    
-    # 备份原配置文件
-    if [ -f "${ppp_config}" ]; then
-        backup_file="${ppp_config}.$(date +%Y%m%d%H%M%S).bak"
-        cp "${ppp_config}" "${backup_file}"
-        echo "已备份原配置文件到 ${backup_file}"
-    fi
-    
-    if [ ! -f "${ppp_config}" ]; then
-        echo "下载默认配置文件..."
-        if ! wget -q -O "${ppp_config}" "https://raw.githubusercontent.com/liulilittle/openppp2/main/appsettings.json"; then
-            echo "下载配置文件失败，请检查网络连接"
+    if [ ! -f "$CONFIG_FILE" ]; then
+        if ! download_default_config; then
             return 1
         fi
     fi
     
-    echo -e "\n当前节点信息："
-    echo "接口IP: $(jq -r '.ip.interface' ${ppp_config})"
-    echo "公网IP: $(jq -r '.ip.public' ${ppp_config})"
-    echo "监听端口: $(jq -r '.tcp.listen.port' ${ppp_config})"
-    echo "并发数: $(jq -r '.concurrent' ${ppp_config})"
-    echo "客户端GUID: $(jq -r '.client.guid' ${ppp_config})"
-
-    echo "检测网络信息..."
-    public_ip=$(curl -m 10 -s ip.sb || echo "::")
-    local_ips=$(ip addr | grep 'inet ' | grep -v ' lo' | awk '{print $2}' | cut -d/ -f1 | tr '\n' ' ')
-    echo -e "检测到的公网IP: ${public_ip}\n本地IP地址: ${local_ips}"
-
-    default_public_ip="::"
-    read -p "请输入VPS IP地址（服务端默认为${default_public_ip}，客户端则写vps的IP地址）: " public_ip
-    public_ip=${public_ip:-$default_public_ip}
-
-    while true; do
-        read -p "请输入VPS 端口 [默认: 2025]: " listen_port
-        listen_port=${listen_port:-2025}
+    # 设置默认值
+    local public_ip="::"
+    local interface_ip="::"
+    local listen_port=2025
+    local concurrent=$(nproc)
+    local client_guid=$(generate_guid)
     
-        if [[ "$listen_port" =~ ^[0-9]+$ ]] && [ "$listen_port" -ge 1 ] && [ "$listen_port" -le 65535 ]; then
-            break
-        else
-            echo "输入的端口无效。请确保它是在1到65535的范围内。"
-        fi
-    done
-
-    default_interface_ip="::"
-    read -p "请输入内网IP地址（服务端默认为${default_interface_ip}，客户端可写内网IP地址）: " interface_ip
-    interface_ip=${interface_ip:-$default_interface_ip}
-
-    concurrent=$(nproc)
-    if command -v uuidgen >/dev/null 2>&1; then
-        client_guid=$(uuidgen)
-    else
-        client_guid=$(openssl rand -hex 16 | sed 's/\(........\)\(....\)\(....\)\(....\)\(............\)/\1-\2-\3-\4-\5/')
-    fi
-
     declare -A config_changes=(
         [".concurrent"]=${concurrent}
         [".cdn"]="[]"
@@ -418,7 +276,6 @@ function modify_config() {
         [".server.log"]="/dev/null"
         [".server.mapping"]=true
         [".server.backend"]=""
-        [".server.mapping"]=true
         [".client.guid"]="{${client_guid}}"
         [".client.server"]="ppp://${public_ip}:${listen_port}/"
         [".client.bandwidth"]=0
@@ -436,91 +293,393 @@ function modify_config() {
         [".client.mappings[1].\"local-port\""]=$((listen_port + 4))
         [".client.mappings[1].\"remote-port\""]=$((listen_port + 4))
     )
-
-    echo -e "\n正在更新配置文件..."
+    
+    echo -e "\n正在初始化配置文件..."
     tmp_file=$(mktemp)
 
     for key in "${!config_changes[@]}"; do
         value=${config_changes[$key]}
         if [[ $value =~ ^\[.*\]$ ]]; then
-            if ! jq --argjson val "${value}" "${key} = \$val" "${ppp_config}" > "${tmp_file}" 2>/dev/null; then
+            if ! jq --argjson val "${value}" "${key} = \$val" "${CONFIG_FILE}" > "${tmp_file}" 2>/dev/null; then
                 echo "修改配置项 ${key} 失败"
                 rm -f "${tmp_file}"
-                exit 1
+                return 1
             fi
         elif [[ $value =~ ^[0-9]+$ ]] || [[ $value == "true" ]] || [[ $value == "false" ]]; then
-            if ! jq "${key} = ${value}" "${ppp_config}" > "${tmp_file}" 2>/dev/null; then
+            if ! jq "${key} = ${value}" "${CONFIG_FILE}" > "${tmp_file}" 2>/dev/null; then
                 echo "修改配置项 ${key} 失败"
                 rm -f "${tmp_file}"
-                exit 1
+                return 1
             fi
         else
-            if ! jq "${key} = \"${value}\"" "${ppp_config}" > "${tmp_file}" 2>/dev/null; then
+            if ! jq "${key} = \"${value}\"" "${CONFIG_FILE}" > "${tmp_file}" 2>/dev/null; then
                 echo "修改配置项 ${key} 失败"
                 rm -f "${tmp_file}"
-                exit 1
+                return 1
             fi
         fi
-        mv "${tmp_file}" "${ppp_config}"
+        mv "${tmp_file}" "${CONFIG_FILE}"
     done
+}
 
-    echo "配置文件更新完成。"
+# 安装PPP
+function install_ppp() {
+    init_system_info
+    install_dependencies
+    
+    echo -e "${YELLOW}创建安装目录...${NC}"
+    mkdir -p "$PPP_DIR"
+    cd "$PPP_DIR" || return 1
+    
+    # 获取版本信息
+    local latest_version=$(get_latest_version)
+    if [ -z "$latest_version" ]; then
+        return 1
+    fi
+    
+    echo -e "${GREEN}最新版本: ${latest_version}${NC}"
+    
+    local version
+    read -p "输入要安装的版本 (回车使用最新版本): " version
+    version=${version:-$latest_version}
+    
+    # 选择模式
+    echo -e "\n${GREEN}请选择运行模式:${NC}"
+    echo "1) 服务端"
+    echo "2) 客户端"
+    
+    local mode_choice
+    read -p "输入选择 (1-2)，默认： 服务端 " mode_choice
+    mode_choice=${mode_choice:-1}
+    
+    case $mode_choice in
+        1) local mode="server" ;;
+        2) local mode="client" ;;
+        *) 
+            echo -e "${RED}无效选择${NC}"
+            return 1
+            ;;
+    esac
+    
+    # 选择下载版本
+    if ! select_download_version "$version" "$(check_io_uring_support && echo true || echo false)"; then
+        return 1
+    fi
+    
+    # 初始化配置
+    if ! init_config; then
+        return 1
+    fi
+    
+    # 配置服务
+    if ! configure_service "$mode"; then
+        return 1
+    fi
+    
+    # 启动服务
+    systemctl enable ppp.service
+    systemctl start ppp.service
+    
+    echo -e "${GREEN}PPP ${mode} 安装完成!${NC}"
+}
 
-    echo -e "\n修改后的配置参数："
-    echo "接口IP: $(jq -r '.ip.interface' ${ppp_config})"
-    echo "公网IP: $(jq -r '.ip.public' ${ppp_config})"
-    echo "监听端口: $(jq -r '.tcp.listen.port' ${ppp_config})"
-    echo "并发数: $(jq -r '.concurrent' ${ppp_config})"
-    echo "客户端GUID: $(jq -r '.client.guid' ${ppp_config})"
-    echo -e "\n${ppp_config} 服务端配置文件修改成功。"
-    echo -e "\n${ppp_config} 同时可以当作客户端配置文件。"
-    restart_ppp
+# 卸载PPP
+function uninstall_ppp() {
+    echo -e "${YELLOW}卸载PPP...${NC}"
+    
+    # 停止服务
+    systemctl stop ppp.service 2>/dev/null
+    systemctl disable ppp.service 2>/dev/null
+    
+    # 删除服务文件
+    rm -f "$SERVICE_FILE"
+    systemctl daemon-reload
+    systemctl reset-failed
+    
+    # 杀死残留进程
+    pkill -f "${PPP_DIR}/ppp"
+    
+    # 删除安装目录
+    rm -rf "$PPP_DIR"
+    
+    echo -e "${GREEN}PPP已完全卸载${NC}"
+}
+
+# 服务管理
+function manage_service() {
+    local action=$1
+    
+    case $action in
+        start)
+            systemctl start ppp.service
+            echo -e "${GREEN}PPP服务已启动${NC}"
+            ;;
+        stop)
+            systemctl stop ppp.service
+            echo -e "${GREEN}PPP服务已停止${NC}"
+            ;;
+        restart)
+            systemctl restart ppp.service
+            echo -e "${GREEN}PPP服务已重启${NC}"
+            ;;
+        status)
+            systemctl status ppp.service
+            ;;
+        *)
+            echo -e "${RED}无效操作${NC}"
+            return 1
+            ;;
+    esac
+}
+
+# 更新PPP
+function update_ppp() {
+    echo -e "${YELLOW}更新PPP...${NC}"
+    
+    if [ ! -d "$PPP_DIR" ]; then
+        echo -e "${RED}PPP未安装${NC}"
+        return 1
+    fi
+    
+    cd "$PPP_DIR" || return 1
+    
+    # 获取当前版本
+    local current_version=$("./ppp" --version 2>/dev/null || echo "unknown")
+    
+    # 获取最新版本
+    local latest_version=$(get_latest_version)
+    if [ -z "$latest_version" ]; then
+        return 1
+    fi
+    
+    echo -e "当前版本: ${current_version}"
+    echo -e "最新版本: ${latest_version}"
+    
+    if [ "$current_version" == "$latest_version" ]; then
+        echo -e "${GREEN}已经是最新版本${NC}"
+        return 0
+    fi
+    
+    # 停止服务
+    systemctl stop ppp.service
+    
+    # 备份当前版本
+    local backup_dir="${PPP_DIR}_backup_$(date +%Y%m%d%H%M%S)"
+    mkdir -p "$backup_dir"
+    cp -a "$PPP_DIR"/* "$backup_dir/"
+    echo -e "${GREEN}已备份当前版本到: ${backup_dir}${NC}"
+    
+    # 下载新版本
+    if ! select_download_version "$latest_version" "$(check_io_uring_support && echo true || echo false)"; then
+        echo -e "${RED}更新失败, 已恢复备份${NC}"
+        cp -a "$backup_dir"/* "$PPP_DIR/"
+        systemctl start ppp.service
+        return 1
+    fi
+    
+    # 启动服务
+    systemctl start ppp.service
+    
+    echo -e "${GREEN}PPP已更新到 ${latest_version}${NC}"
+}
+
+# 查看会话
+function view_session() {
+    if ! screen -list | grep -q "ppp"; then
+        echo -e "${RED}没有找到PPP会话${NC}"
+        return 1
+    fi
+    
+    echo -e "${YELLOW}正在进入PPP会话...${NC}"
+    echo -e "${GREEN}提示: 使用 'Ctrl+a d' 退出而不关闭会话${NC}"
+    screen -r ppp
+}
+
+# 查看配置
+function show_config() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo -e "${RED}配置文件不存在${NC}"
+        return 1
+    fi
+    
+    echo -e "\n${GREEN}当前配置:${NC}"
+    echo "1) 接口IP: $(jq -r '.ip.interface' "$CONFIG_FILE")"
+    echo "2) 公网IP: $(jq -r '.ip.public' "$CONFIG_FILE")"
+    echo "3) 监听端口: $(jq -r '.tcp.listen.port' "$CONFIG_FILE")"
+    echo "4) 并发数: $(jq -r '.concurrent' "$CONFIG_FILE")"
+    echo "5) 客户端GUID: $(jq -r '.client.guid' "$CONFIG_FILE")"
+    echo "6) key.protocol: $(jq -r '.key.protocol' "$CONFIG_FILE")"
+    echo "7) key.transport: $(jq -r '.key.transport' "$CONFIG_FILE")"
+}
+
+# 修改配置
+function edit_config() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo -e "${RED}配置文件不存在${NC}"
+        return 1
+    fi
+    
+    while true; do
+        show_config
+        
+        echo -e "\n${YELLOW}选择要修改的配置项:${NC}"
+        echo "1) 修改接口IP"
+        echo "2) 修改公网IP"
+        echo "3) 修改监听端口"
+        echo "4) 修改并发数"
+        echo "5) 修改客户端GUID"
+        echo "6) 修改key.protocol"
+        echo "7) 修改key.transport"
+        echo "0) 返回"
+        
+        local choice
+        read -p "输入选择 (0-7), 默认 0: " choice
+        choice=${choice:-0}
+        
+        case $choice in
+            0) break ;;
+            1|2|3|4|5|6|7)
+                modify_config_item "$choice"
+                ;;
+            *)
+                echo -e "${RED}无效选择${NC}"
+                ;;
+        esac
+    done
+    
+    # 重启服务应用配置
+    systemctl restart ppp.service
+    echo -e "${GREEN}配置已更新并应用${NC}"
+}
+# 修改配置项
+function modify_config_item() {
+    local choice=$1
+    
+    case $choice in
+        1)
+            read -p "输入新的接口IP，默认是 :: ,支持同时监听 IPv4/IPv6 协议: " new_value
+            new_value=${new_value:-::}
+            jq ".ip.interface = \"$new_value\"" "$CONFIG_FILE" > tmp.json && mv tmp.json "$CONFIG_FILE"
+            ;;
+        2)
+            read -p "输入新的公网IP，默认是 :: ,支持同时监听 IPv4/IPv6 协议: " new_value
+            new_value=${new_value:-::}
+            jq ".ip.public = \"$new_value\"" "$CONFIG_FILE" > tmp.json && mv tmp.json "$CONFIG_FILE"
+            ;;
+        3)
+            read -p "输入新的监听端口，默认 $(date +%Y) : " new_value
+            new_value=${new_value:-$(date +%Y)}
+            jq ".tcp.listen.port = $new_value | .udp.listen.port = $new_value" "$CONFIG_FILE" > tmp.json && mv tmp.json "$CONFIG_FILE"
+            ;;
+        4)
+            read -p "输入新的并发数，默认 $(nproc): " new_value
+            new_value=${new_value:-$(nproc)}
+            jq ".concurrent = $new_value" "$CONFIG_FILE" > tmp.json && mv tmp.json "$CONFIG_FILE"
+            ;;
+        5)
+            read -p "输入新的客户端GUID，默认是 $(generate_guid) 生成: " new_value
+            new_value=${new_value:-$(generate_guid)}
+            jq ".client.guid = \"$new_value\"" "$CONFIG_FILE" > tmp.json && mv tmp.json "$CONFIG_FILE"
+            ;;
+        6)
+            new_value=$(select_crypto_algorithm "key.protocol")
+            [ -n "$new_value" ] && jq ".key.protocol = \"$new_value\"" "$CONFIG_FILE" > tmp.json && mv tmp.json "$CONFIG_FILE"
+            ;;
+        7)
+            new_value=$(select_crypto_algorithm "key.transport")
+            [ -n "$new_value" ] && jq ".key.transport = \"$new_value\"" "$CONFIG_FILE" > tmp.json && mv tmp.json "$CONFIG_FILE"
+            ;;
+        *)
+            echo -e "${RED}无效选择${NC}"
+            return 1
+            ;;
+    esac
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}修改配置失败${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}配置已更新${NC}"
+}
+
+# 选择加密算法
+function select_crypto_algorithm() {
+    local key_name=$1
+    
+    echo -e "\n${GREEN}选择 $key_name 加密算法:${NC}"
+    echo "1) aes-128-cfb"
+    echo "2) aes-256-cfb"
+    echo "3) simd-aes-128-cfb"
+    echo "4) simd-aes-256-cfb"
+    
+    local choice
+    read -p "输入选择 (1-4)，默认 1: " choice
+    choice=${choice:-1}
+    
+    case $choice in
+        1) echo "aes-128-cfb" ;;
+        2) echo "aes-256-cfb" ;;
+        3) echo "simd-aes-128-cfb" ;;
+        4) echo "simd-aes-256-cfb" ;;
+        *) 
+            echo -e "${RED}无效选择，使用默认值 aes-128-cfb${NC}"
+            echo ""
+            ;;
+    esac
 }
 
 # 显示主菜单
 function show_menu() {
-    PS3='请选择一个操作: '
-    options=("安装PPP" "启动PPP" "停止PPP" "重启PPP" "更新PPP" "卸载PPP" "查看PPP会话" "查看配置" "编辑配置项" "修改配置文件" "退出")
-    select opt in "${options[@]}"
-    do
-        case $opt in
-            "安装PPP")
-                install_ppp
+    while true; do
+        echo -e "\n${GREEN}PPP2 服务管理${NC}"
+        echo "1) 安装PPP"
+        echo "2) 启动PPP"
+        echo "3) 停止PPP"
+        echo "4) 重启PPP"
+        echo "5) 更新PPP"
+        echo "6) 卸载PPP"
+        echo "7) 查看PPP"
+        echo "8) 查看配置"
+        echo "9) 修改配置"
+        echo "10) 退出"
+        
+        local choice
+        read -p "请输入选项 (1-10): " choice
+        
+        case $choice in
+            1) install_ppp ;;
+            2) manage_service start ;;
+            3) manage_service stop ;;
+            4) manage_service restart ;;
+            5) update_ppp ;;
+            6) uninstall_ppp ;;
+            7) view_session ;;
+            8) show_config ;;
+            9) edit_config ;;
+            10)
+                echo -e "${GREEN}退出脚本${NC}"
+                exit 0
                 ;;
-            "启动PPP")
-                start_ppp
+            *)
+                echo -e "${RED}无效选项${NC}"
                 ;;
-            "停止PPP")
-                stop_ppp
-                ;;
-            "重启PPP")
-                restart_ppp
-                ;;
-            "更新PPP")
-                update_ppp
-                ;;
-            "卸载PPP")
-                uninstall_ppp
-                ;;
-            "查看PPP会话")
-                view_ppp_session
-                ;;
-            "查看配置")
-                view_config
-                ;;
-            "编辑配置项")
-                edit_config_item
-                ;;
-            "修改配置文件")
-                modify_config
-                ;;
-            "退出")
-                break
-                ;;
-            *) echo "无效选项 $REPLY";;
         esac
+        
+        # 每次操作后暂停一下
+        read -p "按回车键继续..."
     done
 }
 
-# 脚本入口
+# 检查root权限
+if [ "$(id -u)" -ne 0 ]; then
+    echo -e "${RED}错误: 此脚本需要root权限${NC}"
+    exit 1
+fi
+
+# 主入口
+clear
+echo -e "${GREEN}PPP2 管理脚本 版本: ${NC}${RED} v1.0.0 ${NC}"
+echo -e "${GREEN}作者: 周宇航${NC}"
+
 show_menu
