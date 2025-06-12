@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入 openppp2 的 tag 名称'
         required: true
-        default: 'v2.0.0'
+        default: 'v2.7.0'
 
 jobs:
   build:
@@ -18,7 +18,8 @@ jobs:
         platform: 
           - linux/amd64
           - linux/aarch64
-        io_uring: [true, false]
+        ENABLE_IO: [true, false]
+        ENABLE_SIMD: [true, false]
         include:
           - platform: linux/amd64
             platform_name: linux-amd64
@@ -65,8 +66,13 @@ jobs:
           exit 1
         fi
 
-        if ${{ matrix.io_uring }}; then
+        # 定义构建文件名
+        if ${{ matrix.ENABLE_IO }} && ${{ matrix.ENABLE_SIMD }}; then
+          ARTIFACT_NAME=openppp2-${PLATFORM}-io-uring-simd.zip
+        elif ${{ matrix.ENABLE_IO }}; then
           ARTIFACT_NAME=openppp2-${PLATFORM}-io-uring.zip
+        elif ${{ matrix.ENABLE_SIMD }}; then
+          ARTIFACT_NAME=openppp2-${PLATFORM}-simd.zip
         else
           ARTIFACT_NAME=openppp2-${PLATFORM}.zip
         fi
@@ -82,7 +88,7 @@ jobs:
         sed -i 's|SET(THIRD_PARTY_LIBRARY_DIR /root/dev)|SET(THIRD_PARTY_LIBRARY_DIR $ENV{THIRD_PARTY_LIBRARY_DIR})|' CMakeLists.txt
 
     - name: Enable IO_URING in CMakeLists.txt
-      if: ${{ matrix.io_uring }}
+      if: ${{ matrix.ENABLE_IO }}
       run: |
         cd openppp2
         sed -i 's|# IF(PLATFORM_SYSTEM_LINUX)|IF(PLATFORM_SYSTEM_LINUX)|' CMakeLists.txt
@@ -90,6 +96,12 @@ jobs:
         sed -i 's|# *ADD_DEFINITIONS(-DBOOST_ASIO_DISABLE_EPOLL=1)|    ADD_DEFINITIONS(-DBOOST_ASIO_DISABLE_EPOLL=1)|' CMakeLists.txt
         sed -i 's|# ENDIF()|ENDIF()|' CMakeLists.txt
         sed -i 's|# *liburing.a|liburing.a|g' CMakeLists.txt
+
+    - name: Enable AES_NI in CMakeLists.txt
+      if: ${{ matrix.ENABLE_SIMD }}
+      run: |
+        cd openppp2
+        sed -i 's|SET(__AES_NI__ FALSE)|SET(__AES_NI__ TRUE)|' CMakeLists.txt
         # 验证修改结果
         cat CMakeLists.txt
 
@@ -120,7 +132,7 @@ jobs:
         sudo apt-get install -y \
           build-essential \
           cmake
-        if ${{ matrix.io_uring }}; then
+        if ${{ matrix.ENABLE_IO }}; then
           sudo apt-get install -y liburing-dev
         fi
 
