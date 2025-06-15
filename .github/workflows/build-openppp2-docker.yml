@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入 openppp2 版本标签,默认为最新版'
         required: true
-        default: 'v2.8.0'
+        default: 'v3.0.0'
 
 env:
   REGISTRY: ghcr.io
