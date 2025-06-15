@@ -2,6 +2,7 @@
 
 # 全局配置
 PPP_DIR="/opt/ppp"
+BACKUP_DIR="${PPP_DIR}/backup"
 CONFIG_FILE="${PPP_DIR}/appsettings.json"
 SERVICE_FILE="/etc/systemd/system/ppp.service"
 GITHUB_REPO="rebecca554owen/toys"
@@ -25,8 +26,8 @@ function init_system_info() {
 
     # 获取系统架构和内核版本
     ARCH=$(uname -m)
-    KERNEL_VERSION=$(uname -r)
-    echo -e "${GREEN}系统信息: ${ID} ${VERSION_ID}, 架构: ${ARCH}, 内核: ${KERNEL_VERSION}${NC}"
+    KERNEL_VERSION=$(uname -r | cut -d- -f1)
+    echo -e "${GREEN}系统: ${ID} ${VERSION_ID}, 架构: ${ARCH}, 内核: ${KERNEL_VERSION}${NC}"
 }
 
 # 安装依赖
@@ -42,11 +43,6 @@ function install_dependencies() {
             exit 1
             ;;
     esac
-    
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}依赖安装失败${NC}"
-        exit 1
-    fi
 }
 
 # 检查IO_URING支持
@@ -95,6 +91,12 @@ function download_and_extract() {
     
     if [ -z "$download_url" ] || [ "$download_url" == "null" ]; then
         echo -e "${RED}无法获取下载链接${NC}"
+        return 1
+    fi
+    
+    # 检查系统类型
+    if [[ "$ID" != "ubuntu" && "$ID" != "debian" ]]; then
+        echo -e "${RED}仅支持Ubuntu和Debian系统${NC}"
         return 1
     fi
     
@@ -211,13 +213,20 @@ EOF
 }
 
 # 备份配置文件
-function backup_config() {
-    if [ -f "$CONFIG_FILE" ]; then
-        local timestamp=$(date +%Y%m%d%H%M%S)
-        local backup_file="${CONFIG_FILE}.${timestamp}.bak"
-        cp "$CONFIG_FILE" "$backup_file"
-        echo -e "${GREEN}已备份配置文件到: ${backup_file}${NC}"
+function backup_ppp() {
+    
+    # 删除旧的backup文件夹
+    if [ -d "$BACKUP_DIR" ]; then
+        rm -rf "$BACKUP_DIR"
     fi
+    
+    # 创建新的backup文件夹
+    mkdir -p "$BACKUP_DIR"
+
+    # 复制 ppp和配置文件 到备份目录
+    cp ppp "$CONFIG_FILE" "$BACKUP_DIR"
+
+    echo -e "${GREEN}已备份当前目录到: ${BACKUP_DIR}${NC}"
 }
 
 # 下载默认配置
@@ -243,8 +252,7 @@ function generate_guid() {
 
 # 初始化配置
 function init_config() {
-    backup_config
-    
+
     if [ ! -f "$CONFIG_FILE" ]; then
         if ! download_default_config; then
             return 1
@@ -324,7 +332,6 @@ function init_config() {
 
 # 安装PPP
 function install_ppp() {
-    init_system_info
     install_dependencies
     
     echo -e "${YELLOW}创建安装目录...${NC}"
@@ -443,36 +450,28 @@ function update_ppp() {
     
     cd "$PPP_DIR" || return 1
     
-    # 获取当前版本
-    local current_version=$("./ppp" --version 2>/dev/null || echo "unknown")
-    
-    # 获取最新版本
+    # 获取最新版本号
     local latest_version=$(get_latest_version)
     if [ -z "$latest_version" ]; then
         return 1
     fi
     
-    echo -e "当前版本: ${current_version}"
-    echo -e "最新版本: ${latest_version}"
+    echo -e "${GREEN}最新版本: ${latest_version}${NC}"
     
-    if [ "$current_version" == "$latest_version" ]; then
-        echo -e "${GREEN}已经是最新版本${NC}"
-        return 0
-    fi
+    local version
+    read -p "输入要更新的版本 (回车使用最新版本): " version
+    version=${version:-$latest_version}
     
     # 停止服务
     systemctl stop ppp.service
-    
+
     # 备份当前版本
-    local backup_dir="${PPP_DIR}_backup_$(date +%Y%m%d%H%M%S)"
-    mkdir -p "$backup_dir"
-    cp -a "$PPP_DIR"/* "$backup_dir/"
-    echo -e "${GREEN}已备份当前版本到: ${backup_dir}${NC}"
-    
+    backup_ppp
+
     # 下载新版本
-    if ! select_download_version "$latest_version" "$(check_io_uring_support && echo true || echo false)"; then
+    if ! select_download_version "$version" "$(check_io_uring_support && echo true || echo false)"; then
         echo -e "${RED}更新失败, 已恢复备份${NC}"
-        cp -a "$backup_dir"/* "$PPP_DIR/"
+        cp -a "$BACKUP_DIR"/* "$PPP_DIR/"
         systemctl start ppp.service
         return 1
     fi
@@ -480,7 +479,7 @@ function update_ppp() {
     # 启动服务
     systemctl start ppp.service
     
-    echo -e "${GREEN}PPP已更新到 ${latest_version}${NC}"
+    echo -e "${GREEN}PPP已更新到 ${version}${NC}"
 }
 
 # 查看会话
@@ -551,6 +550,7 @@ function edit_config() {
     systemctl restart ppp.service
     echo -e "${GREEN}配置已更新并应用${NC}"
 }
+
 # 修改配置项
 function modify_config_item() {
     local choice=$1
@@ -607,24 +607,26 @@ function modify_config_item() {
 function select_crypto_algorithm() {
     local key_name=$1
     
-    echo -e "\n${GREEN}选择 $key_name 加密算法:${NC}"
-    echo "1) aes-128-cfb"
-    echo "2) aes-256-cfb"
-    echo "3) simd-aes-128-cfb"
-    echo "4) simd-aes-256-cfb"
+    # 显示提示信息
+    echo -e "\n${GREEN}选择 $key_name 加密算法:${NC}" >&2
+    echo "1) aes-128-cfb" >&2
+    echo "2) aes-256-cfb" >&2
+    echo "3) simd-aes-128-cfb" >&2
+    echo "4) simd-aes-256-cfb" >&2
     
     local choice
     read -p "输入选择 (1-4)，默认 1: " choice
     choice=${choice:-1}
     
+    # 仅返回选择的算法字符串
     case $choice in
         1) echo "aes-128-cfb" ;;
         2) echo "aes-256-cfb" ;;
         3) echo "simd-aes-128-cfb" ;;
         4) echo "simd-aes-256-cfb" ;;
         *) 
-            echo -e "${RED}无效选择，使用默认值 aes-128-cfb${NC}"
-            echo ""
+            echo -e "${RED}无效选择，使用默认值 aes-128-cfb${NC}" >&2
+            echo "aes-128-cfb"
             ;;
     esac
 }
@@ -632,7 +634,7 @@ function select_crypto_algorithm() {
 # 显示主菜单
 function show_menu() {
     while true; do
-        echo -e "\n${GREEN}PPP2 服务管理${NC}"
+        echo -e "${GREEN}PPP2 服务管理${NC}"
         echo "1) 安装PPP"
         echo "2) 启动PPP"
         echo "3) 停止PPP"
@@ -665,21 +667,17 @@ function show_menu() {
                 echo -e "${RED}无效选项${NC}"
                 ;;
         esac
-        
-        # 每次操作后暂停一下
-        read -p "按回车键继续..."
     done
 }
 
+# 主入口
+clear
 # 检查root权限
 if [ "$(id -u)" -ne 0 ]; then
     echo -e "${RED}错误: 此脚本需要root权限${NC}"
     exit 1
 fi
-
-# 主入口
-clear
 echo -e "${GREEN}PPP2 管理脚本 版本: ${NC}${RED} v1.0.0 ${NC}"
 echo -e "${GREEN}作者: 周宇航${NC}"
-
+init_system_info
 show_menu
