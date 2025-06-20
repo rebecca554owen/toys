@@ -47,37 +47,35 @@ const dnsConfig = {
 
 // 规则配置
 const rules = [
-  // 自定义规则
-  "DOMAIN,lan.freewife.online,DIRECT",
+  // 自定义规则（最高优先级）
   "DOMAIN-SUFFIX,freewife.online,节点选择",
-  // Geo规则
-  "GEOSITE,geolocation-!cn,节点选择",
-  "GEOSITE,telegram,Telegram",
-  "GEOSITE,youtube,节点选择",
-  "GEOSITE,google,节点选择",
-  "GEOSITE,github,节点选择",
-  "GEOSITE,category-ai-!cn,AI",
-  "GEOSITE,CN,DIRECT",
+
+  // 直连优先
   "GEOIP,lan,DIRECT,no-resolve",
-  "GEOIP,telegram,Telegram",
-  "GEOIP,google,节点选择",
   "GEOIP,CN,DIRECT",
+  "GEOSITE,CN,DIRECT",
+
+  // 特殊应用
+  "GEOIP,google,节点选择",
+  "GEOSITE,google,节点选择",
+  "GEOIP,telegram,Telegram",
+  "GEOSITE,telegram,Telegram",
+  "GEOSITE,category-ai-!cn,AI",
+
+  // 通用规则
+  "GEOSITE,geolocation-!cn,节点选择",
+
   // 兜底规则
   "MATCH,节点选择"
 ];
 
+
 // 代理提供者配置
 const proxyProviders = {
-  "provider1": {
-    type: "http",
-    interval: 3600,
-    url: "https://raw.githubusercontent.com/rebecca554owen/toys/main/yaml.yaml",
-    path: "./provider1.yaml"
-  },
-  "provider2": {
+  "provider": {
     type: "file",
     interval: 3600,
-    path: "./provider2.yaml"
+    path: "./provider.yaml"
   }
 };
 
@@ -136,7 +134,7 @@ function main(config) {
       ...groupBaseOption,
       name: "节点选择",
       type: "select",
-      proxies: ["前置节点","relay","延迟选优","故障转移","HongKong","TaiWan","Singapore","Japan","America","Others"],
+      proxies: ["前置节点","出口节点", "延迟选优","故障转移","HongKong","TaiWan","Singapore","Japan","America","Others", "relay"],
       "include-all": true,
       icon: "https://fastly.jsdelivr.net/gh/clash-verge-rev/clash-verge-rev.github.io@main/docs/assets/icons/adjust.svg"
     },
