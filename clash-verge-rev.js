@@ -56,11 +56,11 @@ const rules = [
   "GEOSITE,CN,DIRECT",
 
   // 特殊应用
-  "GEOIP,google,节点选择",
-  "GEOSITE,google,节点选择",
+  "GEOSITE,category-ai-!cn,AI",
   "GEOIP,telegram,Telegram",
   "GEOSITE,telegram,Telegram",
-  "GEOSITE,category-ai-!cn,AI",
+  "GEOIP,google,节点选择",
+  "GEOSITE,google,节点选择",
 
   // 通用规则
   "GEOSITE,geolocation-!cn,节点选择",
