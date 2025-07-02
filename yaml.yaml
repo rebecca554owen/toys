@@ -1,15 +1,36 @@
 proxies:
-  - name: HK-vps-town-v4
+  - name: HK-bage-v4
     type: socks5
     server: 192.168.5.10
     port: 1080
     username: admin
     password: password
 
-  - name: HK-vps-town-v6
+  - name: HK-bage-v6
     type: socks5
     server: 192.168.5.10
     port: 1081
+    username: admin
+    password: password
+
+  - name: HK-vps-town-v6
+    type: socks5
+    server: 192.168.5.10
+    port: 1083
+    username: admin
+    password: password
+
+  - name: HK-vps-town-v4
+    type: socks5
+    server: 192.168.5.10
+    port: 1084
+    username: admin
+    password: password
+
+  - name: HK-vkvm-v4
+    type: socks5
+    server: 192.168.5.10
+    port: 1085
     username: admin
     password: password
 
@@ -19,25 +40,3 @@ proxies:
     port: 1082
     username: admin
     password: password
-
-  - name: HK-hks-v4
-    type: socks5
-    server: 192.168.5.10
-    port: 1083
-    username: admin
-    password: password
-
-  - name: HK-hks-v6
-    type: socks5
-    server: 192.168.5.10
-    port: 1084
-    username: admin
-    password: password
-
-  - name: HK-9950X
-    type: socks5
-    server: 192.168.5.10
-    port: 1085
-    username: admin
-    password: password
-    
