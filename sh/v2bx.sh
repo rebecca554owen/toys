@@ -177,11 +177,11 @@ validate_core_node_types() {
         "sing")
             core_sing=true
             case "$NodeType" in
-                "vless" | "vmess" | "shadowsocks" | "trojan" | "hysteria" | "hysteria2")
+                "vless" | "vmess" | "shadowsocks" | "trojan" | "hysteria" | "hysteria2" | "tuic" | "anytls")
                     ;;
                 *)
                     echo -e "${RED}错误：sing-box核心不支持该协议：$NodeType${NC}"
-                    echo -e "${YELLOW}sing-box核心支持的协议：vless, vmess, shadowsocks, trojan, hysteria, hysteria2${NC}"
+                    echo -e "${YELLOW}sing-box核心支持的协议：vless, vmess, shadowsocks, trojan, hysteria, hysteria2, tuic, anytls${NC}"
                     return 1
                     ;;
             esac

@@ -1,13 +1,11 @@
 // 国内DNS服务器
 const domesticNameservers = [
-  "https://dns.alidns.com/dns-query",  // 阿里
-  "https://doh.pub/dns-query"          // 腾讯
+  "system"
 ];
 
 // 国外DNS服务器
 const foreignNameservers = [
-  "https://dns.cloudflare.com/dns-query",  // Cloudflare 
-  "https://dns.google/dns-query"           // Google
+  "system"
 ];
 
 // DNS配置
@@ -15,7 +13,6 @@ const dnsConfig = {
   enable: true,
   ipv6: true,
   listen: "0.0.0.0:1053",
-  "respect-rules": true,
   "enhanced-mode": "fake-ip",
   "fake-ip-range": "198.18.0.1/16",
   "fake-ip-filter": [
@@ -35,11 +32,10 @@ const dnsConfig = {
     "time.*.com",
     // geosite
     "geosite:cn",
-    "geosite:private",
-    "geosite:connectivity-check"
+    "geosite:private"
   ],
-  "default-nameserver": ["system"],
   nameserver: [...domesticNameservers],
+  "default-nameserver": [...domesticNameservers],
   "proxy-server-nameserver": [...domesticNameservers],
   "nameserver-policy": {
     "geosite:private,cn,geolocation-cn": domesticNameservers,
@@ -50,7 +46,7 @@ const dnsConfig = {
 // 规则配置
 const rules = [
   // 自定义规则
-  "geosite,category-ads-all,REJECT", 
+  //  "geosite,category-ads-all,REJECT", 
   // 直连优先
   "GEOIP,lan,DIRECT,no-resolve",
   "GEOIP,cn,DIRECT",
@@ -59,7 +55,6 @@ const rules = [
   "GEOIP,telegram,Telegram",
   "GEOSITE,telegram,Telegram",
   "GEOSITE,category-ai-!cn,Ai",
-  "DST-PORT,22,SSH",
   // 兜底规则
   "MATCH,节点选择"
 ];
@@ -112,7 +107,7 @@ function main(config) {
       ...groupBaseOption,
       name: "节点选择",
       type: "select",
-      proxies: ["前置节点","出口节点","延迟选优","故障转移","HongKong","TaiWan","Singapore","Japan","America","Others"],
+      proxies: ["前置节点","出口节点","HongKong","TaiWan","Singapore","Japan","America","Others"],
       "include-all": true,
       icon: "https://fastly.jsdelivr.net/gh/clash-verge-rev/clash-verge-rev.github.io@main/docs/assets/icons/adjust.svg"
     },
@@ -120,7 +115,7 @@ function main(config) {
       ...groupBaseOption,
       name: "前置节点",
       type: "select",
-      proxies: ["延迟选优","故障转移","HongKong","TaiWan","Singapore","Japan","America"],
+      proxies: ["HongKong","TaiWan","Singapore","Japan","America"],
       "include-all": true,
       icon: "https://fastly.jsdelivr.net/gh/clash-verge-rev/clash-verge-rev.github.io@main/docs/assets/icons/cloudflare.svg"
     },
@@ -147,33 +142,6 @@ function main(config) {
       proxies: ["节点选择","前置节点","出口节点","HongKong","TaiWan","Singapore","Japan","America","Others"],
       "include-all": true,
       icon: "https://fastly.jsdelivr.net/gh/clash-verge-rev/clash-verge-rev.github.io@main/docs/assets/icons/telegram.svg"
-    },
-    {
-      ...groupBaseOption,
-      name: "SSH",
-      type: "select",
-      proxies: ["节点选择","前置节点","出口节点","DIRECT"],
-      "include-all": true,
-      icon: "https://fastly.jsdelivr.net/gh/clash-verge-rev/clash-verge-rev.github.io@main/docs/assets/icons/unknown.svg"
-    },
-    {
-      ...groupBaseOption,
-      name: "延迟选优",
-      type: "url-test",
-      tolerance: 50,
-      proxies: [],
-      "include-all": true,
-      hidden: true,
-      icon: "https://fastly.jsdelivr.net/gh/clash-verge-rev/clash-verge-rev.github.io@main/docs/assets/icons/speed.svg"
-    },
-    {
-      ...groupBaseOption,
-      name: "故障转移",
-      type: "fallback",
-      proxies: [],
-      "include-all": true,
-      hidden: true,
-      icon: "https://fastly.jsdelivr.net/gh/clash-verge-rev/clash-verge-rev.github.io@main/docs/assets/icons/ambulance.svg"
     },
     {
       ...groupBaseOption,
