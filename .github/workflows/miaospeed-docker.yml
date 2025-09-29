@@ -6,7 +6,7 @@ on:
       tag:
         description: 'Docker image tag,默认为latest'
         required: false
-        default: 'v4.5.8'
+        default: 'v4.6.0'
 
 env:
   REGISTRY_GHCR: ghcr.io

@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入 openppp2 的 tag 名称'
         required: true
-        default: 'v3.0.0'
+        default: 'v4.0.0'
 
 jobs:
   build:
