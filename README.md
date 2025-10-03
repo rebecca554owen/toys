@@ -57,3 +57,8 @@ https://raw.githubusercontent.com/rebecca554owen/toys/main/clash-verge-rec.js
 ```
 https://raw.githubusercontent.com/rebecca554owen/toys/main/yaml.yaml
 ```
+## 1Panel 迁移工具脚本
+使用仓库根目录的 `sh.sh` 自动下载并安装 1Panel 迁移工具，先执行核心升级，可按提示选择是否升级站点。
+```
+bash <(curl -Ls https://raw.githubusercontent.com/rebecca554owen/toys/main/sh.sh)
+```
