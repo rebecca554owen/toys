@@ -12,8 +12,6 @@ class GetTopServer extends Telegram {
     public $description = '查询今日节点流量排行（默认前3名）';
 
     public function handle($message, $match = []) {
-        $telegramService = $this->telegramService;
-
         // 检查用户权限
         if (!$message->is_private) return;
         $user = User::where('telegram_id', $message->chat_id)->first();
@@ -36,14 +34,15 @@ class GetTopServer extends Telegram {
         $topServers = $statService->getRanking('server_traffic_rank', $limit);
         
         // 修改排行榜生成逻辑
-        $text = "🚥今日节点流量排行Top{$limit}\n—————————————\n";
+        $text = "🚥今日节点流量排行Top{$limit}\n";
+        $text .= "—————————————\n";
         $rank = 1;
         foreach ($topServers as $serverStat) {
             $totalTraffic = Helper::trafficConvert($serverStat->u + $serverStat->d);
-            $text .= "{$rank}. 节点ID: `{$serverStat->server_id}`，类型: `{$serverStat->server_type}`，流量: `{$totalTraffic}`\n";
+            $text .= "{$rank}. 节点ID: {$serverStat->server_id}，类型: {$serverStat->server_type}，流量: {$totalTraffic}\n";
             $rank++;
         }
 
-        $telegramService->sendMessage($message->chat_id, $text, 'markdown');
+        $this->telegramService->sendMessage($message->chat_id, $text);
     }
 }

@@ -6,6 +6,7 @@ use Illuminate\Console\Command;
 use App\Models\User;
 use App\Services\TelegramService;
 use App\Services\StatisticalService;
+use App\Utils\Helper;
 
 class GetTopUsers extends Command
 {
@@ -24,57 +25,28 @@ class GetTopUsers extends Command
 
     private function getTopUsers()
     {
-        // 获取今天的开始时间戳
-        $recordAt = strtotime('today');
-        
-        // 获取今天的用户流量
+        // 统计今日排行数据
         $statService = new StatisticalService();
-        $statService->setStartAt($recordAt);
-        $todayTraffics = $statService->getStatUser();
-
-        // 合并相同用户的流量
-        $mergedRecords = [];
-        foreach ($todayTraffics as $record) {
-            $userId = $record['user_id'];
-            $traffic = $record['u'] + $record['d'];
-            if (isset($mergedRecords[$userId])) {
-                $mergedRecords[$userId] += $traffic;
-            } else {
-                $mergedRecords[$userId] = $traffic;
-            }
-        }
-
-        // 将合并后的记录进行排序并获取前三个
-        $sortedRecords = collect($mergedRecords)->sortByDesc(function ($traffic) {
-            return $traffic;
-        })->take(3);
+        $statService->setStartAt(strtotime('today'));
+        $statService->setEndAt(strtotime('tomorrow'));
+        $limit = 3;
+        $topUsers = $statService->getRanking('user_consumption_rank', $limit);
 
         // 生成 Telegram 消息
-        $message = "📊 今日用户流量排行前3名\n";
-        $message .= "———————————\n";
-        foreach ($sortedRecords as $userId => $totalTraffic) {
-            $totalTrafficFormatted = $this->formatBytes($totalTraffic);
-            $user = User::find($userId);
-            $email = $user ? $this->maskEmail($user->email) : '未知';
-            $message .= "用户ID: {$userId}，邮箱: {$email}，流量使用总计：{$totalTrafficFormatted}\n";
+        $message = "🚥今日流量排行Top{$limit}用户\n";
+        $message .= "—————————————\n";
+        $rank = 1;
+        foreach ($topUsers as $userStat) {
+            $user = User::find($userStat->user_id);
+            $totalTraffic = Helper::trafficConvert($userStat->total);
+            $email = $user ? $user->email : '未知';
+            $message .= "{$rank}. ID: {$userStat->user_id}，邮箱: {$email}，今日流量: {$totalTraffic}\n";
+            $rank++;
         }
 
         // 发送 Telegram 消息
         $telegramService = new TelegramService();
         $telegramService->sendMessageWithAdmin($this->escapeMarkdown($message));
-    }
-
-    private function formatBytes($bytes)
-    {
-        if ($bytes >= 1024 * 1024 * 1024 * 1024) {
-            return round($bytes / (1024 * 1024 * 1024 * 1024), 2) . ' TB';
-        } elseif ($bytes >= 1024 * 1024 * 1024) {
-            return round($bytes / (1024 * 1024 * 1024), 2) . ' GB';
-        } elseif ($bytes >= 1024 * 1024) {
-            return round($bytes / (1024 * 1024), 2) . ' MB';
-        } else {
-            return round($bytes / 1024, 2) . ' KB';
-        }
     }
 
     private function escapeMarkdown($text)
@@ -91,13 +63,4 @@ class GetTopUsers extends Command
         return $escapedText;
     }
      
-    private function maskEmail($email)
-    {
-        $emailParts = explode('@', $email);
-        $localPart = $emailParts[0];
-        $localPartLength = strlen($localPart);
-        $maskLength = floor($localPartLength / 2);
-        $maskedLocalPart = substr($localPart, 0, $localPartLength - $maskLength) . str_repeat('*', $maskLength);
-        return $maskedLocalPart . '@' . $emailParts[1];
-    }
 }
