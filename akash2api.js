@@ -132,6 +132,18 @@ async function handleRequest(request, env) {
           owned_by: "akash",
         },
         {
+          id: "DeepSeek-V3-1",
+          object: "model",
+          created: 1686935002,
+          owned_by: "akash",
+        },
+        {
+          id: "gpt-oss-120b",
+          object: "model",
+          created: 1686935002,
+          owned_by: "akash",
+        },
+        {
           id: "Meta-Llama-3-1-405B-Instruct-FP8",
           object: "model",
           created: 1686935002,
