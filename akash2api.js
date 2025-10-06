@@ -1,4 +1,5 @@
-const TOKEN = "XXXXXXXXXXXXXXXXXXX";
+// Token 将通过 Cloudflare Workers 环境变量传入
+const getToken = (env) => env?.TOKEN || "XXXXXXXXXXXXXXXXXXX";
 const DEFAULT_HEADERS = {
   "sec-ch-ua":
     '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
@@ -29,10 +30,27 @@ async function handleStreamResponse(response, model) {
     const encoder = new TextEncoder();
     const decoder = new TextDecoder("utf-8");
 
+    // 创建错误响应函数
+    const createErrorResponse = (error, model) => ({
+      id: crypto.randomUUID(),
+      object: "chat.completion.chunk",
+      created: new Date().getTime(),
+      choices: [
+        {
+          index: 0,
+          delta: {
+            content: `流式处理错误: ${error}`,
+            role: "assistant",
+          },
+          finish_reason: "stop"
+        },
+      ],
+      model: model
+    });
+
     // 创建响应流
     const stream = response.body;
     let buffer = "";
-    let reasoning = false;
     // 处理响应流
     const reader = stream.getReader();
     (async () => {
@@ -46,7 +64,6 @@ async function handleStreamResponse(response, model) {
           }
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
-          console.log(lines);
           buffer = lines.pop() || "";
           for (const line of lines) {
             if (!line.trim()) continue;
@@ -79,13 +96,7 @@ async function handleStreamResponse(response, model) {
         console.error("流处理错误:", error);
         await writer.write(
           encoder.encode(
-            `data: ${JSON.stringify(
-              MessageProcessor.createChatResponse(
-                `流式处理错误${error}`,
-                model,
-                true
-              )
-            )}\n\n`
+            `data: ${JSON.stringify(createErrorResponse(error, model))}\n\n`
           )
         );
         await writer.write(encoder.encode("data: [DONE]\n\n"));
@@ -114,80 +125,64 @@ async function handleRequest(request, env) {
     });
   }
 
-  // 模型列表路由
+  // 模型列表路由 - 从Akash后端实时获取
   if (url.pathname === "/v1/models" && request.method === "GET") {
-    const response = {
-      object: "list",
-      data: [
-        {
-          id: "Meta-Llama-3-3-70B-Instruct",
-          object: "model",
-          created: 1686935002,
-          owned_by: "akash",
-        },
-        {
-          id: "DeepSeek-R1",
-          object: "model",
-          created: 1686935002,
-          owned_by: "akash",
-        },
-        {
-          id: "DeepSeek-V3-1",
-          object: "model",
-          created: 1686935002,
-          owned_by: "akash",
-        },
-        {
-          id: "gpt-oss-120b",
-          object: "model",
-          created: 1686935002,
-          owned_by: "akash",
-        },
-        {
-          id: "Meta-Llama-3-1-405B-Instruct-FP8",
-          object: "model",
-          created: 1686935002,
-          owned_by: "akash",
-        },
-        {
-          id: "Meta-Llama-3-2-3B-Instruct",
-          object: "model",
-          created: 1686935002,
-          owned_by: "akash",
-        },
-        {
-          id: "Meta-Llama-3-1-8B-Instruct-FP8",
-          object: "model",
-          created: 1686935002,
-          owned_by: "akash",
-        },
-        {
-          id: "mistral",
-          object: "model",
-          created: 1686935002,
-          owned_by: "akash",
-        },
-        {
-          id: "nous-hermes2-mixtral",
-          object: "model",
-          created: 1686935002,
-          owned_by: "akash",
-        },
-        {
-          id: "dolphin-mixtral",
-          object: "model",
-          created: 1686935002,
-          owned_by: "akash",
-        },
-      ],
-    };
+    try {
+      const res = await fetch("https://chat.akash.network/api/auth/session", {
+        headers: DEFAULT_HEADERS,
+      });
+      const cookie = res.headers.get("set-cookie")?.split(";")[0];
 
-    return new Response(JSON.stringify(response), {
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-      },
-    });
+      // 获取真实的模型列表
+      const modelsResponse = await fetch("https://chat.akash.network/api/models", {
+        headers: {
+          ...DEFAULT_HEADERS,
+          cookie,
+        },
+      });
+
+      if (!modelsResponse.ok) {
+        throw new Error(`Failed to fetch models: ${modelsResponse.status}`);
+      }
+
+      const akashModels = await modelsResponse.json();
+
+      // 转换为OpenAI兼容格式
+      const response = {
+        object: "list",
+        data: akashModels.map(model => ({
+          id: model.id,
+          object: "model",
+          created: model.created || 1686935002,
+          owned_by: model.owned_by || "akash",
+        })),
+      };
+
+      return new Response(JSON.stringify(response), {
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
+    } catch (error) {
+      // 如果获取失败，返回备用模型列表或错误
+      return new Response(
+        JSON.stringify({
+          error: {
+            message: `Unable to fetch model list: ${error.message}`,
+            type: "server_error",
+            code: "model_list_fetch_failed",
+          },
+        }),
+        {
+          status: 500,
+          headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+          },
+        }
+      );
+    }
   }
 
   if (url.pathname === "/v1/chat/completions" && request.method === "POST") {
@@ -195,7 +190,7 @@ async function handleRequest(request, env) {
       .get("authorization")
       ?.replace("Bearer ", "");
 
-    if (authToken !== TOKEN) {
+    if (authToken !== getToken(env)) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401,
       });
