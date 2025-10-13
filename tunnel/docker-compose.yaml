@@ -1,0 +1,10 @@
+services:  # 定义服务
+  nginx:  # 定义 nginx 服务
+    container_name: nginx-tunel # 容器名称，用于标识该容器
+    image: rebecca554owen/tunnel:latest  # 使用的 Docker 镜像，指定为最新版本
+    network_mode: host  # 使用 host 网络模式，容器直接使用宿主机的网络栈
+    environment:  # 定义环境变量
+      - MODE=in  # 隧道模式，in 表示入站，out 表示出站
+      - LISTEN_PORT=10000  # 监听端口号，隧道将在此端口接收数据
+      - PROXY_PASS_TARGET=127.0.0.1  # 代理转发目标地址，通常为本地回环地址
+      - PROXY_PASS_PORT=8080  # 代理转发目标端口，数据将被转发到此端口
