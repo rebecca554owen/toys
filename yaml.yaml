@@ -1,0 +1,42 @@
+proxies:
+  - name: the HK node
+    type: socks5
+    server: the address
+    port: the port
+    username: admin
+    the secret: the secret
+
+  - name: the HK node
+    type: socks5
+    server: the address
+    port: the port
+    username: admin
+    the secret: the secret
+
+  - name: the HK node
+    type: socks5
+    server: the address
+    port: the port
+    username: admin
+    the secret: the secret
+
+  - name: the HK node
+    type: socks5
+    server: the address
+    port: the port
+    username: admin
+    the secret: the secret
+
+  - name: the HK node
+    type: socks5
+    server: the address
+    port: the port
+    username: admin
+    the secret: the secret
+
+  - name: the HK node
+    type: socks5
+    server: the address
+    port: the port
+    username: admin
+    the secret: the secret
