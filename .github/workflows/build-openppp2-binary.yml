@@ -100,11 +100,11 @@ jobs:
         sed -i 's|# ENDIF()|ENDIF()|' CMakeLists.txt
         sed -i 's|# *liburing.a|liburing.a|g' CMakeLists.txt
 
-    - name: Enable AES_NI in CMakeLists.txt
+    - name: Enable SIMD in CMakeLists.txt
       if: ${{ matrix.ENABLE_SIMD }}
       run: |
         cd openppp2
-        sed -i 's|SET(__AES_NI__ FALSE)|SET(__AES_NI__ TRUE)|' CMakeLists.txt
+        sed -i 's|SET(__SIMD__ FALSE)|SET(__SIMD__ TRUE)|' CMakeLists.txt
         # 验证修改结果
         cat CMakeLists.txt
 

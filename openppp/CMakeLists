@@ -4,6 +4,8 @@ CMAKE_MINIMUM_REQUIRED(VERSION 3.0.0)
 SET(NAME ppp)
 PROJECT(${NAME} C CXX) # CMAKE_CURRENT_SOURCE_DIR
 
+OPTION(PPP_FORCE_STATIC "Force static linking for the ppp executable" OFF)
+
 # C/CXX compiler configurations.
 SET(CMAKE_C_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-implicit-function-declaration")
 SET(CMAKE_CXX_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-inconsistent-missing-override -Wno-pointer-bool-conversion -Wno-unsequenced -Wno-null-dereference -Wno-gnu-variable-sized-type-not-at-end -Wno-tautological-undefined-compare -Wno-deprecated-declarations -Wno-shift-count-overflow")
@@ -112,11 +114,27 @@ ELSE()
     
     # When the __MUSL__ macro is enabled and compilation errors are encountered, you can add the connector option: -static
     # -rdynamic -Wl,-Bstatic -Wl,-Bdynamic -lstdc++ -lpthread -ldl -lz -lrt
-    SET(CMAKE_EXE_LINKER_FLAGS "-static-libstdc++ -rdynamic -Wl,-Bstatic") 
+    SET(CMAKE_EXE_LINKER_FLAGS "-static-libstdc++")
+    IF(PPP_FORCE_STATIC)
+        SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static -static-libgcc -Wl,-Bstatic")
+    ELSE()
+        SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -rdynamic -Wl,-Bstatic")
+    ENDIF()
 ENDIF()
 
 # Set the tripartite library directorys.
-SET(THIRD_PARTY_LIBRARY_DIR /root/dev)
+IF(NOT DEFINED THIRD_PARTY_LIBRARY_DIR OR "${THIRD_PARTY_LIBRARY_DIR}" STREQUAL "")
+    SET(THIRD_PARTY_LIBRARY_DIR /root/dev)
+ENDIF()
+
+IF(DEFINED ENV{THIRD_PARTY_LIBRARY_DIR} AND NOT "$ENV{THIRD_PARTY_LIBRARY_DIR}" STREQUAL "")
+    SET(THIRD_PARTY_LIBRARY_DIR $ENV{THIRD_PARTY_LIBRARY_DIR})
+ENDIF()
+
+SET(PPP_USE_CUSTOM_THIRD_PARTY FALSE)
+IF(THIRD_PARTY_LIBRARY_DIR AND EXISTS "${THIRD_PARTY_LIBRARY_DIR}")
+    SET(PPP_USE_CUSTOM_THIRD_PARTY TRUE)
+ENDIF()
 
 # Set the compiled header file search directorys.
 INCLUDE_DIRECTORIES(
@@ -125,22 +143,108 @@ INCLUDE_DIRECTORIES(
     ${PROJECT_SOURCE_DIR}/common/json/include
     ${PROJECT_SOURCE_DIR}/common/lwip/my
     ${PROJECT_SOURCE_DIR}/common/lwip/include
-
-    ${THIRD_PARTY_LIBRARY_DIR}/boost
-    ${THIRD_PARTY_LIBRARY_DIR}/jemalloc/include
-    ${THIRD_PARTY_LIBRARY_DIR}/openssl/include
-
-    # ${THIRD_PARTY_LIBRARY_DIR}/curl/include
 )
 
-# Set the third library connection directory to searchs.
-LINK_DIRECTORIES(
-    ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib
-    ${THIRD_PARTY_LIBRARY_DIR}/jemalloc/lib
-    ${THIRD_PARTY_LIBRARY_DIR}/openssl
+IF(PPP_FORCE_STATIC)
+    SET(_PPP_PREVIOUS_LIBRARY_SUFFIXES "${CMAKE_FIND_LIBRARY_SUFFIXES}")
+    SET(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+ENDIF()
 
-    # ${THIRD_PARTY_LIBRARY_DIR}/curl/lib/.libs
-)
+IF(PPP_USE_CUSTOM_THIRD_PARTY)
+    INCLUDE_DIRECTORIES(
+        ${THIRD_PARTY_LIBRARY_DIR}/boost
+        ${THIRD_PARTY_LIBRARY_DIR}/jemalloc/include
+        ${THIRD_PARTY_LIBRARY_DIR}/openssl/include
+
+        # ${THIRD_PARTY_LIBRARY_DIR}/curl/include
+    )
+
+    # Set the third library connection directory to searchs.
+    LINK_DIRECTORIES(
+        ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib
+        ${THIRD_PARTY_LIBRARY_DIR}/jemalloc/lib
+        ${THIRD_PARTY_LIBRARY_DIR}/openssl
+
+        # ${THIRD_PARTY_LIBRARY_DIR}/curl/lib/.libs
+    )
+
+    SET(THIRD_PARTY_TARGET_LIBS
+        ${THIRD_PARTY_LIBRARY_DIR}/openssl/libssl.a
+        ${THIRD_PARTY_LIBRARY_DIR}/openssl/libcrypto.a
+        ${THIRD_PARTY_LIBRARY_DIR}/jemalloc/lib/libjemalloc.a
+
+        ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_system.a
+        ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_coroutine.a
+        ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_thread.a
+        ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_context.a
+        ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_regex.a
+        ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_filesystem.a)
+ELSE()
+    SET(Boost_USE_STATIC_LIBS ON)
+    SET(Boost_USE_MULTITHREADED ON)
+    SET(Boost_USE_STATIC_RUNTIME OFF)
+
+    FIND_PACKAGE(Boost REQUIRED COMPONENTS system coroutine thread context regex filesystem)
+    SET(OPENSSL_USE_STATIC_LIBS ${PPP_FORCE_STATIC})
+    FIND_PACKAGE(OpenSSL REQUIRED)
+    FIND_PATH(JEMALLOC_INCLUDE_DIR jemalloc/jemalloc.h)
+    FIND_LIBRARY(JEMALLOC_LIBRARY NAMES jemalloc libjemalloc)
+
+    IF(NOT JEMALLOC_INCLUDE_DIR OR NOT JEMALLOC_LIBRARY)
+        MESSAGE(FATAL_ERROR "jemalloc libraries or headers not found.")
+    ENDIF()
+
+    INCLUDE_DIRECTORIES(
+        ${Boost_INCLUDE_DIRS}
+        ${OPENSSL_INCLUDE_DIR}
+        ${JEMALLOC_INCLUDE_DIR}
+    )
+
+    SET(THIRD_PARTY_TARGET_LIBS
+        ${OPENSSL_LIBRARIES}
+        ${JEMALLOC_LIBRARY}
+        ${Boost_LIBRARIES})
+ENDIF()
+
+IF(PPP_FORCE_STATIC)
+    FIND_LIBRARY(PPP_LIB_ATOMIC atomic)
+    FIND_LIBRARY(PPP_LIB_DL dl)
+    FIND_LIBRARY(PPP_LIB_PTHREAD pthread)
+    FIND_LIBRARY(PPP_LIB_M m)
+    FIND_LIBRARY(PPP_LIB_MVEC mvec)
+    FIND_LIBRARY(PPP_LIB_ICUDATA icudata)
+    FIND_LIBRARY(PPP_LIB_ICUI18N icui18n)
+    FIND_LIBRARY(PPP_LIB_ICUUC icuuc)
+ENDIF()
+
+IF(PPP_FORCE_STATIC)
+    SET(CMAKE_FIND_LIBRARY_SUFFIXES "${_PPP_PREVIOUS_LIBRARY_SUFFIXES}")
+ENDIF()
+
+IF(PLATFORM_SYSTEM_DARWIN)
+    IF(PPP_FORCE_STATIC)
+        SET(PPP_PLATFORM_TARGET_LIBS)
+        FOREACH(_lib PPP_LIB_DL PPP_LIB_PTHREAD)
+            IF(DEFINED ${_lib} AND ${_lib})
+                LIST(APPEND PPP_PLATFORM_TARGET_LIBS ${${_lib}})
+            ENDIF()
+        ENDFOREACH()
+    ELSE()
+        SET(PPP_PLATFORM_TARGET_LIBS dl pthread)
+    ENDIF()
+ELSEIF(PPP_FORCE_STATIC)
+    SET(PPP_PLATFORM_TARGET_LIBS)
+    FOREACH(_lib PPP_LIB_ATOMIC PPP_LIB_DL PPP_LIB_PTHREAD PPP_LIB_M PPP_LIB_MVEC PPP_LIB_ICUDATA PPP_LIB_ICUI18N PPP_LIB_ICUUC)
+        IF(DEFINED ${_lib} AND ${_lib})
+            LIST(APPEND PPP_PLATFORM_TARGET_LIBS ${${_lib}})
+        ENDIF()
+    ENDFOREACH()
+    IF(PPP_PLATFORM_TARGET_LIBS STREQUAL "")
+        MESSAGE(FATAL_ERROR "Unable to locate required static system libraries for PPP_FORCE_STATIC build.")
+    ENDIF()
+ELSE()
+    SET(PPP_PLATFORM_TARGET_LIBS atomic dl pthread)
+ENDIF()
 
 # Set the compiled source file search directorys.
 IF(PLATFORM_SYSTEM_DARWIN)
@@ -178,6 +282,11 @@ FILE(GLOB_RECURSE SOURCE_FILES
 # Add the compiled output binary files.
 ADD_EXECUTABLE(${NAME} ${SOURCE_FILES} ${PLATFORM_SOURCE_FILES} ${AES_NI_SOURCE_FILES})
 
+IF(PPP_FORCE_STATIC)
+    SET_TARGET_PROPERTIES(${NAME} PROPERTIES LINK_SEARCH_START_STATIC ON)
+    SET_TARGET_PROPERTIES(${NAME} PROPERTIES LINK_SEARCH_END_STATIC ON)
+ENDIF()
+
 # Set the compilation output files path.
 SET(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
 
@@ -185,55 +294,20 @@ SET(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
 IF(PLATFORM_SYSTEM_DARWIN)
     SET(BUILD_SHARED_LIBS ON) # System
 
-    TARGET_LINK_LIBRARIES(${NAME} 
-        ${THIRD_PARTY_LIBRARY_DIR}/openssl/libssl.a 
-        ${THIRD_PARTY_LIBRARY_DIR}/openssl/libcrypto.a 
-        ${THIRD_PARTY_LIBRARY_DIR}/jemalloc/lib/libjemalloc.a
+    TARGET_LINK_LIBRARIES(${NAME}
+        ${THIRD_PARTY_TARGET_LIBS}
 
-        dl
-        pthread
-
-        ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_system.a
-        ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_coroutine.a 
-        ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_thread.a 
-        ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_context.a 
-        ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_regex.a 
-        ${THIRD_PARTY_LIBRARY_DIR}/boost/stage/lib/libboost_filesystem.a) 
+        ${PPP_PLATFORM_TARGET_LIBS})
 ELSEIF(PLATFORM_COMPILER_CLANG)
     SET(BUILD_SHARED_LIBS ON)
 
     TARGET_LINK_LIBRARIES(${NAME}
-        libssl.a 
-        libcrypto.a 
-        libjemalloc.a
-        # liburing.a
+        ${THIRD_PARTY_TARGET_LIBS}
 
-        atomic
-        dl
-        pthread
-
-        libboost_system.a
-        libboost_coroutine.a 
-        libboost_thread.a 
-        libboost_context.a
-        libboost_regex.a 
-        libboost_filesystem.a) 
+        ${PPP_PLATFORM_TARGET_LIBS})
 ELSE()
-    TARGET_LINK_LIBRARIES(${NAME} 
-        libc.a
-        libssl.a 
-        libcrypto.a 
-        libjemalloc.a
-        # liburing.a
+    TARGET_LINK_LIBRARIES(${NAME}
+        ${THIRD_PARTY_TARGET_LIBS}
 
-        atomic
-        dl
-        pthread
-
-        libboost_system.a
-        libboost_coroutine.a 
-        libboost_thread.a 
-        libboost_context.a 
-        libboost_regex.a
-        libboost_filesystem.a) 
+        ${PPP_PLATFORM_TARGET_LIBS})
 ENDIF()
