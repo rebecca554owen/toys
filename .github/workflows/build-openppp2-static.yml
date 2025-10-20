@@ -1,4 +1,4 @@
-name: build-openppp2-binary
+name: build-openppp2-static
 
 on:
   workflow_dispatch:
@@ -13,9 +13,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: 
+        os:
           - ubuntu-22.04
-        platform: 
+        platform:
           - linux/amd64
           - linux/aarch64
         ENABLE_IO: [true, false]
@@ -37,25 +37,16 @@ jobs:
       OPENSSL_VERSION: 3.5.0
 
     steps:
-    - name: Checkout openppp2 repository
+    - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        repository: liulilittle/openppp2
-        path: openppp2
-        ref: main
 
     - name: Get openppp2 tag
       id: get-tag
       run: |
         echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
 
-    - name: Validate openppp2 tag
+    - name: Validate parameters
       run: |
-        if [[ ! "${{ steps.get-tag.outputs.tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-          echo "错误：标签格式无效，应为v*.*.*"
-          exit 1
-        fi
-
         PLATFORM=${{ matrix.platform_name }}
         if [[ -z "${PLATFORM}" ]]; then
           echo "错误：平台参数为空"
@@ -64,13 +55,13 @@ jobs:
 
         # 定义构建文件名
         if ${{ matrix.ENABLE_IO }} && ${{ matrix.ENABLE_SIMD }}; then
-          ARTIFACT_NAME=openppp2-${PLATFORM}-io-uring-simd.zip
+          ARTIFACT_NAME=openppp2-${PLATFORM}-static-io-uring-simd.tar.gz
         elif ${{ matrix.ENABLE_IO }}; then
-          ARTIFACT_NAME=openppp2-${PLATFORM}-io-uring.zip
+          ARTIFACT_NAME=openppp2-${PLATFORM}-static-io-uring.tar.gz
         elif ${{ matrix.ENABLE_SIMD }}; then
-          ARTIFACT_NAME=openppp2-${PLATFORM}-simd.zip
+          ARTIFACT_NAME=openppp2-${PLATFORM}-static-simd.tar.gz
         else
-          ARTIFACT_NAME=openppp2-${PLATFORM}.zip
+          ARTIFACT_NAME=openppp2-${PLATFORM}-static.tar.gz
         fi
         echo "ARTIFACT_NAME=${ARTIFACT_NAME}" >> $GITHUB_ENV
 
@@ -80,13 +71,13 @@ jobs:
 
     - name: Replace THIRD_PARTY_LIBRARY_DIR in CMakeLists.txt
       run: |
-        cd openppp2
+        cd openppp
         sed -i 's|SET(THIRD_PARTY_LIBRARY_DIR /root/dev)|SET(THIRD_PARTY_LIBRARY_DIR $ENV{THIRD_PARTY_LIBRARY_DIR})|' CMakeLists.txt
 
     - name: Enable IO_URING in CMakeLists.txt
       if: ${{ matrix.ENABLE_IO }}
       run: |
-        cd openppp2
+        cd openppp
         sed -i 's|# IF(PLATFORM_SYSTEM_LINUX)|IF(PLATFORM_SYSTEM_LINUX)|' CMakeLists.txt
         sed -i 's|# *ADD_DEFINITIONS(-DBOOST_ASIO_HAS_IO_URING=1)|    ADD_DEFINITIONS(-DBOOST_ASIO_HAS_IO_URING=1)|' CMakeLists.txt
         sed -i 's|# *ADD_DEFINITIONS(-DBOOST_ASIO_DISABLE_EPOLL=1)|    ADD_DEFINITIONS(-DBOOST_ASIO_DISABLE_EPOLL=1)|' CMakeLists.txt
@@ -96,10 +87,8 @@ jobs:
     - name: Enable SIMD in CMakeLists.txt
       if: ${{ matrix.ENABLE_SIMD }}
       run: |
-        cd openppp2
+        cd openppp
         sed -i 's|SET(__SIMD__ FALSE)|SET(__SIMD__ TRUE)|' CMakeLists.txt
-        # 验证修改结果
-        cat CMakeLists.txt
 
     - name: Cache Boost
       id: cache-boost
@@ -166,25 +155,32 @@ jobs:
         ./Configure
         make -j $(nproc)
 
-    - name: Build openppp2
+    - name: Build openppp2 static
       run: |
-        cd openppp2
+        cd openppp
         mkdir -p build
         cd build
         cmake .. -DCMAKE_BUILD_TYPE=Release \
-                -DPLATFORM_SYSTEM_LINUX=ON
+                -DPLATFORM_SYSTEM_LINUX=ON \
+                -DPPP_FORCE_STATIC=ON
         make -j $(nproc)
 
-    - name: Package openppp2
+    - name: Inspect binary
       run: |
-        cd openppp2/bin
-        zip -r ${{ env.ARTIFACT_NAME }} ppp
+        file openppp/bin/ppp
+        ldd openppp/bin/ppp || true
 
-    - name: Upload openppp2
+    - name: Package openppp2 static
+      run: |
+        mkdir -p artifacts/${{ matrix.platform_name }}
+        cp openppp/bin/ppp artifacts/${{ matrix.platform_name }}/ppp
+        tar -czf ${{ env.ARTIFACT_NAME }} -C artifacts/${{ matrix.platform_name }} .
+
+    - name: Upload openppp2 static
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.ARTIFACT_NAME }}
-        path: openppp2/bin/${{ env.ARTIFACT_NAME }}
+        path: ${{ env.ARTIFACT_NAME }}
 
     - name: Record build time
       run: |
@@ -193,8 +189,15 @@ jobs:
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        files: ./openppp2/bin/*.zip
+        files: ./*.tar.gz
         tag_name: ${{ steps.get-tag.outputs.tag }}
-        body: "Release: ${{ env.BUILD_TIME }}"
+        body: |
+          Static Build Release: ${{ env.BUILD_TIME }}
+
+          ## 构建配置
+          - 平台: ${{ matrix.platform_name }}
+          - IO_URING: ${{ matrix.ENABLE_IO }}
+          - SIMD: ${{ matrix.ENABLE_SIMD }}
+          - 静态链接: 是
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
