@@ -191,7 +191,7 @@ jobs:
         echo "BUILD_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
 
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v2.4.1
       with:
         files: ./openppp2/bin/*.zip
         tag_name: ${{ steps.get-tag.outputs.tag }}
