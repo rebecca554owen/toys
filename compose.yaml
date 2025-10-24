@@ -14,4 +14,4 @@ services:
     environment:
     - ENABLE_IO=false   # 启用 IO 操作
     - ENABLE_SIMD=false # 启用 SIMD 优化
-    command: ppp --mode=client --tun-host=no --tun-flash=yes --tun-ssmt=4/mq --tun-mux=0 # 启动命令
+    command: --mode=client --tun-host=no --tun-flash=yes --tun-ssmt=4/mq --tun-mux=0 # 启动命令

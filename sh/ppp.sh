@@ -60,15 +60,13 @@ function check_io_uring_support() {
 
 # 获取最新版本
 function get_latest_version() {
-    echo -e "${YELLOW}获取最新版本信息...${NC}"
     local release_info=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest")
     local latest_version=$(echo "$release_info" | jq -r '.tag_name')
-    
+
     if [ -z "$latest_version" ] || [ "$latest_version" == "null" ]; then
-        echo -e "${RED}获取最新版本失败${NC}"
         return 1
     fi
-    
+
     echo "$latest_version"
 }
 
@@ -339,11 +337,13 @@ function install_ppp() {
     cd "$PPP_DIR" || return 1
     
     # 获取版本信息
+    echo -e "${YELLOW}获取最新版本信息...${NC}"
     local latest_version=$(get_latest_version)
     if [ -z "$latest_version" ]; then
+        echo -e "${RED}获取最新版本失败${NC}"
         return 1
     fi
-    
+
     echo -e "${GREEN}最新版本: ${latest_version}${NC}"
     
     local version
@@ -451,11 +451,13 @@ function update_ppp() {
     cd "$PPP_DIR" || return 1
     
     # 获取最新版本号
+    echo -e "${YELLOW}获取最新版本信息...${NC}"
     local latest_version=$(get_latest_version)
     if [ -z "$latest_version" ]; then
+        echo -e "${RED}获取最新版本失败${NC}"
         return 1
     fi
-    
+
     echo -e "${GREEN}最新版本: ${latest_version}${NC}"
     
     local version

@@ -38,23 +38,28 @@ jobs:
 
     steps:
     - name: Checkout openppp2 repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       with:
         repository: liulilittle/openppp2
         path: openppp2
         ref: main
 
+    - name: Set Environment Variables
+      run: |
+        echo "THIRD_PARTY_LIBRARY_DIR=$GITHUB_WORKSPACE" >> $GITHUB_ENV
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake
+        if ${{ matrix.ENABLE_IO }}; then
+          sudo apt-get install -y liburing-dev
+        fi
+
     - name: Get openppp2 tag
       id: get-tag
-      shell: bash
       run: |
-        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-          echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-        elif [ "${{ github.event_name }}" = "push" ] && [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-        else
-          echo "tag=v1.0.0" >> $GITHUB_OUTPUT
-        fi
+        echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
 
     - name: Validate openppp2 tag
       run: |
@@ -81,33 +86,6 @@ jobs:
         fi
         echo "ARTIFACT_NAME=${ARTIFACT_NAME}" >> $GITHUB_ENV
 
-    - name: Set THIRD_PARTY_LIBRARY_DIR environment variables
-      run: |
-        echo "THIRD_PARTY_LIBRARY_DIR=$GITHUB_WORKSPACE" >> $GITHUB_ENV
-
-    - name: Replace THIRD_PARTY_LIBRARY_DIR in CMakeLists.txt
-      run: |
-        cd openppp2
-        sed -i 's|SET(THIRD_PARTY_LIBRARY_DIR /root/dev)|SET(THIRD_PARTY_LIBRARY_DIR $ENV{THIRD_PARTY_LIBRARY_DIR})|' CMakeLists.txt
-
-    - name: Enable IO_URING in CMakeLists.txt
-      if: ${{ matrix.ENABLE_IO }}
-      run: |
-        cd openppp2
-        sed -i 's|# IF(PLATFORM_SYSTEM_LINUX)|IF(PLATFORM_SYSTEM_LINUX)|' CMakeLists.txt
-        sed -i 's|# *ADD_DEFINITIONS(-DBOOST_ASIO_HAS_IO_URING=1)|    ADD_DEFINITIONS(-DBOOST_ASIO_HAS_IO_URING=1)|' CMakeLists.txt
-        sed -i 's|# *ADD_DEFINITIONS(-DBOOST_ASIO_DISABLE_EPOLL=1)|    ADD_DEFINITIONS(-DBOOST_ASIO_DISABLE_EPOLL=1)|' CMakeLists.txt
-        sed -i 's|# ENDIF()|ENDIF()|' CMakeLists.txt
-        sed -i 's|# *liburing.a|liburing.a|g' CMakeLists.txt
-
-    - name: Enable AES_NI in CMakeLists.txt
-      if: ${{ matrix.ENABLE_SIMD }}
-      run: |
-        cd openppp2
-        sed -i 's|SET(__AES_NI__ FALSE)|SET(__AES_NI__ TRUE)|' CMakeLists.txt
-        # 验证修改结果
-        cat CMakeLists.txt
-
     - name: Cache Boost
       id: cache-boost
       uses: actions/cache@v4
@@ -129,16 +107,30 @@ jobs:
         path: openssl
         key: ${{ matrix.platform }}-${{ matrix.os }}-openssl-${{ env.OPENSSL_VERSION }}
 
-    - name: Install dependencies
+    - name: Replace THIRD_PARTY_LIBRARY_DIR in CMakeLists.txt
       run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          cmake
-        if ${{ matrix.ENABLE_IO }}; then
-          sudo apt-get install -y liburing-dev
-        fi
+        cd openppp2
+        sed -i 's|SET(THIRD_PARTY_LIBRARY_DIR /root/dev)|SET(THIRD_PARTY_LIBRARY_DIR $ENV{THIRD_PARTY_LIBRARY_DIR})|' CMakeLists.txt
 
+    - name: Enable IO_URING in CMakeLists.txt
+      if: ${{ matrix.ENABLE_IO }}
+      run: |
+        cd openppp2
+        sed -i 's|# IF(PLATFORM_SYSTEM_LINUX)|IF(PLATFORM_SYSTEM_LINUX)|' CMakeLists.txt
+        sed -i 's|# *ADD_DEFINITIONS(-DBOOST_ASIO_HAS_IO_URING=1)|    ADD_DEFINITIONS(-DBOOST_ASIO_HAS_IO_URING=1)|' CMakeLists.txt
+        sed -i 's|# *ADD_DEFINITIONS(-DBOOST_ASIO_DISABLE_EPOLL=1)|    ADD_DEFINITIONS(-DBOOST_ASIO_DISABLE_EPOLL=1)|' CMakeLists.txt
+        sed -i 's|# ENDIF()|ENDIF()|' CMakeLists.txt
+        sed -i 's|# *liburing.a|liburing.a|g' CMakeLists.txt
+
+    - name: Enable SIMD in CMakeLists.txt
+      if: ${{ matrix.ENABLE_SIMD }}
+      run: |
+        cd openppp2
+        sed -i 's|SET(__SIMD__ FALSE)|SET(__SIMD__ TRUE)|' CMakeLists.txt
+        # 验证修改结果
+        cat CMakeLists.txt
+
+    
     - name: Build boost
       if: steps.cache-boost.outputs.cache-hit != 'true'
       run: |
@@ -200,7 +192,7 @@ jobs:
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        files: ./openppp2/bin/*.zip
+        files: openppp2/bin/${{ env.ARTIFACT_NAME }}
         tag_name: ${{ steps.get-tag.outputs.tag }}
         body: "Release: ${{ env.BUILD_TIME }}"
       env:

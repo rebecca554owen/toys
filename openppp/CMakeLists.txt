@@ -71,13 +71,13 @@ CHECK_CXX_COMPILER_FLAG("-std=c++17" COMPILER_SUPPORTS_CXX17)
 CHECK_CXX_COMPILER_FLAG("-std=c++1z" COMPILER_SUPPORTS_CXX1Z)
 
 # If the current compiler environment is detected to support AES.
-SET(__AES_NI__ FALSE)
-IF(__AES_NI__)
+SET(__SIMD__ FALSE)
+IF(__SIMD__)
     # Add in the compiler flag section.
     ADD_COMPILE_OPTIONS(-maes -msse2 -mpclmul)
 
     # Add the AES_NI compiler macro.
-    ADD_DEFINITIONS(-D__AES_NI__)
+    ADD_DEFINITIONS(-D__SIMD__)
 
     # Additional options for the old version of GCC.
     IF(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 8.0)
