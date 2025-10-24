@@ -27,13 +27,13 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: v2b
           fetch-depth: 1
 
       - name: Checkout submodules
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: wyx2685/v2board
           path: v2b/v2board
@@ -55,13 +55,7 @@ jobs:
       - name: Get tag
         id: get-tag
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-          elif [ "${{ github.event_name }}" = "push" ] && [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=v1.0.0" >> $GITHUB_OUTPUT
-          fi
+          echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
 
       - name: Validate Docker tag
         run: |
@@ -77,7 +71,7 @@ jobs:
           ls -la v2b/v2board/  # 检查子模块是否检出
 
       - name: Build and push images
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./v2b/Dockerfile
