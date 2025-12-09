@@ -496,61 +496,60 @@ function view_session() {
     screen -r ppp
 }
 
-# 查看配置
-function show_config() {
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo -e "${RED}配置文件不存在${NC}"
-        return 1
-    fi
-    
-    echo -e "\n${GREEN}当前配置:${NC}"
-    echo "1) 接口IP: $(jq -r '.ip.interface' "$CONFIG_FILE")"
-    echo "2) 公网IP: $(jq -r '.ip.public' "$CONFIG_FILE")"
-    echo "3) 监听端口: $(jq -r '.tcp.listen.port' "$CONFIG_FILE")"
-    echo "4) 并发数: $(jq -r '.concurrent' "$CONFIG_FILE")"
-    echo "5) 客户端GUID: $(jq -r '.client.guid' "$CONFIG_FILE")"
-    echo "6) key.protocol: $(jq -r '.key.protocol' "$CONFIG_FILE")"
-    echo "7) key.transport: $(jq -r '.key.transport' "$CONFIG_FILE")"
-}
 
-# 修改配置
-function edit_config() {
+# 配置管理
+function config_manage() {
     if [ ! -f "$CONFIG_FILE" ]; then
         echo -e "${RED}配置文件不存在${NC}"
         return 1
     fi
-    
+
     while true; do
-        show_config
-        
-        echo -e "\n${YELLOW}选择要修改的配置项:${NC}"
-        echo "1) 修改接口IP"
-        echo "2) 修改公网IP"
-        echo "3) 修改监听端口"
-        echo "4) 修改并发数"
-        echo "5) 修改客户端GUID"
-        echo "6) 修改key.protocol"
-        echo "7) 修改key.transport"
-        echo "0) 返回"
-        
+        clear
+        # 显示当前配置
+        echo -e "${GREEN}当前配置:${NC}"
+        echo "1) 接口IP: $(jq -r '.ip.interface' "$CONFIG_FILE")"
+        echo "2) 公网IP: $(jq -r '.ip.public' "$CONFIG_FILE")"
+        echo "3) 监听端口: $(jq -r '.tcp.listen.port' "$CONFIG_FILE")"
+        echo "4) 并发数: $(jq -r '.concurrent' "$CONFIG_FILE")"
+        echo "5) 客户端GUID: $(jq -r '.client.guid' "$CONFIG_FILE")"
+        echo "6) key.protocol: $(jq -r '.key.protocol' "$CONFIG_FILE")"
+        echo "7) key.transport: $(jq -r '.key.transport' "$CONFIG_FILE")"
+
+        echo -e "\n${YELLOW}配置管理选项:${NC}"
+        echo "1-7) 修改对应配置项"
+        echo "8) 查看完整配置文件"
+        echo "0) 返回主菜单"
+
         local choice
-        read -p "输入选择 (0-7), 默认 0: " choice
-        choice=${choice:-0}
-        
+        read -p "输入选择 (0-8): " choice
+
         case $choice in
             0) break ;;
             1|2|3|4|5|6|7)
                 modify_config_item "$choice"
+                # 询问是否继续修改
+                read -p "是否继续修改其他配置？(y/n): " continue_edit
+                if [ "$continue_edit" != "y" ]; then
+                    # 重启服务应用配置
+                    systemctl restart ppp.service 2>/dev/null
+                    echo -e "${GREEN}配置已更新并应用${NC}"
+                    break
+                fi
+                ;;
+            8)
+                echo -e "\n${GREEN}完整配置文件内容:${NC}"
+                echo "----------------------------------------"
+                cat "$CONFIG_FILE" | jq .
+                echo "----------------------------------------"
+                read -p "按回车键继续..."
                 ;;
             *)
                 echo -e "${RED}无效选择${NC}"
+                sleep 1
                 ;;
         esac
     done
-    
-    # 重启服务应用配置
-    systemctl restart ppp.service
-    echo -e "${GREEN}配置已更新并应用${NC}"
 }
 
 # 修改配置项
@@ -638,30 +637,34 @@ function show_menu() {
     while true; do
         echo -e "${GREEN}PPP2 服务管理${NC}"
         echo "1) 安装PPP"
-        echo "2) 启动PPP"
-        echo "3) 停止PPP"
-        echo "4) 重启PPP"
-        echo "5) 更新PPP"
-        echo "6) 卸载PPP"
-        echo "7) 查看PPP"
-        echo "8) 查看配置"
-        echo "9) 修改配置"
-        echo "10) 退出"
-        
+        echo "2) 卸载PPP"
+        echo "3) 启动PPP"
+        echo "4) 停止PPP"
+        echo "5) 重启PPP"
+        echo "6) 更新PPP"
+        echo "7) 查看会话"
+        echo "8) 配置管理"
+        echo "9) 退出"
+
         local choice
-        read -p "请输入选项 (1-10): " choice
-        
+        read -p "请输入选项 (1-9): " choice
+
         case $choice in
             1) install_ppp ;;
-            2) manage_service start ;;
-            3) manage_service stop ;;
-            4) manage_service restart ;;
-            5) update_ppp ;;
-            6) uninstall_ppp ;;
+            2)
+                echo -e "${RED}警告: 此操作将完全卸载PPP！${NC}"
+                read -p "确认卸载？输入 'yes' 继续: " confirm
+                if [ "$confirm" = "yes" ]; then
+                    uninstall_ppp
+                fi
+                ;;
+            3) manage_service start ;;
+            4) manage_service stop ;;
+            5) manage_service restart ;;
+            6) update_ppp ;;
             7) view_session ;;
-            8) show_config ;;
-            9) edit_config ;;
-            10)
+            8) config_manage ;;
+            9)
                 echo -e "${GREEN}退出脚本${NC}"
                 exit 0
                 ;;
@@ -679,7 +682,7 @@ if [ "$(id -u)" -ne 0 ]; then
     echo -e "${RED}错误: 此脚本需要root权限${NC}"
     exit 1
 fi
-echo -e "${GREEN}PPP2 管理脚本 版本: ${NC}${RED} v1.0.0 ${NC}"
+echo -e "${GREEN}PPP2 管理脚本 版本: ${NC}${RED} v1.0.1 ${NC}"
 echo -e "${GREEN}作者: 周宇航${NC}"
 init_system_info
 show_menu
