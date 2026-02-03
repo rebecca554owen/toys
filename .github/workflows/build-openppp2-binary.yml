@@ -34,7 +34,7 @@ jobs:
       ACTIONS_ALLOW_UNSECURE_COMMANDS: true
       BOOST_VERSION: 1.86.0
       JEMALLOC_VERSION: 5.3.0
-      OPENSSL_VERSION: 3.5.0
+      OPENSSL_VERSION: 3.6.1
 
     steps:
     - name: Checkout openppp2 repository
