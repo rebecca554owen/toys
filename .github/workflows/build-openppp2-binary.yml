@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入 openppp2 的 tag 名称'
         required: true
-        default: 'v4.0.0'
+        default: 'v5.0.0'
 
 jobs:
   build:
@@ -38,7 +38,7 @@ jobs:
 
     steps:
     - name: Checkout openppp2 repository
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
       with:
         repository: liulilittle/openppp2
         path: openppp2
@@ -88,21 +88,21 @@ jobs:
 
     - name: Cache Boost
       id: cache-boost
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: boost
         key: ${{ matrix.platform }}-${{ matrix.os }}-boost-${{ env.BOOST_VERSION }}
 
     - name: Cache Jemalloc
       id: cache-jemalloc
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: jemalloc
         key: ${{ matrix.platform }}-${{ matrix.os }}-jemalloc-${{ env.JEMALLOC_VERSION }}
 
     - name: Cache OpenSSL
       id: cache-openssl
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: openssl
         key: ${{ matrix.platform }}-${{ matrix.os }}-openssl-${{ env.OPENSSL_VERSION }}
@@ -180,7 +180,7 @@ jobs:
         zip -r ${{ env.ARTIFACT_NAME }} ppp
 
     - name: Upload openppp2
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: ${{ env.ARTIFACT_NAME }}
         path: openppp2/bin/${{ env.ARTIFACT_NAME }}

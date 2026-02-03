@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入 openppp2 版本标签,默认为最新版'
         required: true
-        default: 'v4.0.0'
+        default: 'v5.0.0'
 
 env:
   REGISTRY: ghcr.io
@@ -27,7 +27,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up QEMU for multi-platform builds
         uses: docker/setup-qemu-action@v3
@@ -77,7 +77,7 @@ jobs:
           echo $DIGEST > /tmp/digests/${{ matrix.platform_name }}
 
       - name: Upload digests
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: digests-${{ matrix.platform_name }}
           path: /tmp/digests
@@ -88,7 +88,7 @@ jobs:
     needs: build
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: digests-*
           path: /tmp/digests
