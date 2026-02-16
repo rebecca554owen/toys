@@ -40,7 +40,7 @@ jobs:
     - name: Checkout openppp2 repository
       uses: actions/checkout@v6
       with:
-        repository: liulilittle/openppp2
+        repository: rebecca554owen/openppp2
         path: openppp2
         ref: main
 
