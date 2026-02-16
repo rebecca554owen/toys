@@ -1,8 +1,8 @@
 proxies:
-  - name: HK-bage-v4
+  - name: HK-dmit-v6
     type: socks5
     server: 127.0.0.1
-    port: 1080
+    port: 1084
     username: admin
     password: password
 
@@ -13,24 +13,10 @@ proxies:
     username: admin
     password: password
 
-  - name: HK-vps-town-v6
+  - name: HK-bage-v4
     type: socks5
     server: 127.0.0.1
-    port: 1083
-    username: admin
-    password: password
-
-  - name: HK-vps-town-v4
-    type: socks5
-    server: 127.0.0.1
-    port: 1084
-    username: admin
-    password: password
-
-  - name: HK-cnf-v4
-    type: socks5
-    server: 127.0.0.1
-    port: 1085
+    port: 1080
     username: admin
     password: password
 
@@ -38,5 +24,12 @@ proxies:
     type: socks5
     server: 127.0.0.1
     port: 1082
+    username: admin
+    password: password
+
+  - name: HK-vps-town-v6
+    type: socks5
+    server: 127.0.0.1
+    port: 1083
     username: admin
     password: password
