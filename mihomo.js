@@ -15,8 +15,8 @@ const dnsConfig = {
   enable: true,
   ipv6: true,
   listen: "0.0.0.0:1053",
-  "prefer-h3": true,
-  "use-system-hosts": false,  // true or false
+  "prefer-h3": false,
+  "use-system-hosts": true,  // true or false
   "cache-algorithm": "arc",
   "enhanced-mode": "fake-ip",
   "fake-ip-range": "172.29.0.1/16",
@@ -68,16 +68,10 @@ const rules = [
 
 // 代理提供者配置
 const proxyProviders = {
-  "provider1": {
-    type: "http",
-    interval: 3600,
-    url: "https://raw.githubusercontent.com/rebecca554owen/toys/main/yaml.yaml",
-    path: "./provider1.yaml"
-  },
-  "provider2": {
+  "node": {
     type: "file",
     interval: 3600,
-    path: "./provider2.yaml"
+    path: "./node.yaml"
   }
 };
 
