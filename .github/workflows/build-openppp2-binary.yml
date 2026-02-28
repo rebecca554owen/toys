@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入 openppp2 的 tag 名称'
         required: true
-        default: 'v5.0.0'
+        default: 'v6.0.0'
 
 jobs:
   build:
@@ -59,7 +59,11 @@ jobs:
     - name: Get openppp2 tag
       id: get-tag
       run: |
-        echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+        TAG="${{ github.event.inputs.tag }}"
+        DATE=$(TZ='Asia/Shanghai' date +'%Y%m%d')
+        echo "tag=${TAG}" >> $GITHUB_OUTPUT
+        # app 版本: 1.0.0-20250228 (固定1.0.0 + 日期)
+        echo "app_version=1.0.0-${DATE}" >> $GITHUB_OUTPUT
 
     - name: Validate openppp2 tag
       run: |
@@ -85,6 +89,13 @@ jobs:
           ARTIFACT_NAME=openppp2-${PLATFORM}.zip
         fi
         echo "ARTIFACT_NAME=${ARTIFACT_NAME}" >> $GITHUB_ENV
+
+    - name: Set version in source code
+      run: |
+        APP_VERSION="${{ steps.get-tag.outputs.app_version }}"
+        cd openppp2
+        sed -i "s/#define PPP_APPLICATION_VERSION (\"[^\"]*\")/#define PPP_APPLICATION_VERSION (\"${APP_VERSION}\")/" ppp/stdafx.h
+        echo "Updated version: ${APP_VERSION}"
 
     - name: Cache Boost
       id: cache-boost
@@ -194,6 +205,8 @@ jobs:
       with:
         files: openppp2/bin/${{ env.ARTIFACT_NAME }}
         tag_name: ${{ steps.get-tag.outputs.tag }}
-        body: "Release: ${{ env.BUILD_TIME }}"
+        body: |
+          Version: ${{ steps.get-tag.outputs.app_version }}
+          Build Time: ${{ env.BUILD_TIME }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
