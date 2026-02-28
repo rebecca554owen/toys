@@ -5,7 +5,8 @@ const domesticNameservers = [
 
 // 国外DNS服务器
 const foreignNameservers = [
-  "system"
+  "https://dns.cloudflare.com/dns-query",  // Cloudflare 
+  "https://dns.google/dns-query"           // Google
 ];
 
 // DNS配置
@@ -118,14 +119,6 @@ function main(config) {
       proxies: ["HongKong","TaiWan","Singapore","Japan","America"],
       "include-all": true,
       icon: "https://fastly.jsdelivr.net/gh/clash-verge-rev/clash-verge-rev.github.io@main/docs/assets/icons/cloudflare.svg"
-    },
-    {
-      ...groupBaseOption,
-      name: "出口节点",
-      type: "select",
-      proxies: [],
-      "include-all": true,
-      icon: "https://fastly.jsdelivr.net/gh/clash-verge-rev/clash-verge-rev.github.io@main/docs/assets/icons/link.svg"
     },
     {
       ...groupBaseOption,
