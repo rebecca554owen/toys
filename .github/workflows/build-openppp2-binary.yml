@@ -191,7 +191,7 @@ jobs:
     - name: Package openppp2
       run: |
         cd openppp2/bin
-        zip -r ${{ env.ARTIFACT_NAME }} ppp driver.ko
+        zip -r ${{ env.ARTIFACT_NAME }} ppp
 
     - name: Upload openppp2
       uses: actions/upload-artifact@v7
