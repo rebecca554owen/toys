@@ -8,6 +8,9 @@ on:
         required: true
         default: 'v6.0.0'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -201,12 +204,12 @@ jobs:
         echo "BUILD_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
 
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
+      uses: ncipollo/release-action@v1
       with:
-        files: openppp2/bin/${{ env.ARTIFACT_NAME }}
-        tag_name: ${{ steps.get-tag.outputs.tag }}
+        tag: ${{ steps.get-tag.outputs.tag }}
+        artifacts: openppp2/bin/${{ env.ARTIFACT_NAME }}
+        allowUpdates: true
+        replacesArtifacts: true
         body: |
           Version: ${{ steps.get-tag.outputs.app_version }}
           Build Time: ${{ env.BUILD_TIME }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
