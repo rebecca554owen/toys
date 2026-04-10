@@ -45,7 +45,7 @@ jobs:
       with:
         repository: rebecca554owen/openppp2
         path: openppp2
-        ref: main
+        ref: inet6
 
     - name: Set Environment Variables
       run: |
