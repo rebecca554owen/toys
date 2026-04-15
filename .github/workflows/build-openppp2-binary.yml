@@ -210,6 +210,7 @@ jobs:
         artifacts: openppp2/bin/${{ env.ARTIFACT_NAME }}
         allowUpdates: true
         replacesArtifacts: true
+        makeLatest: true
         body: |
           Version: ${{ steps.get-tag.outputs.app_version }}
           Build Time: ${{ env.BUILD_TIME }}
