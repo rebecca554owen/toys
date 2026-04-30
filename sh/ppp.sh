@@ -279,7 +279,6 @@ function init_config() {
         [".websocket.path"]="/tun"
         [".websocket.listen.ws"]=2095
         [".websocket.listen.wss"]=2096
-        [".server.log"]="/dev/null"
         [".server.mapping"]=true
         [".server.backend"]=""
         [".client.guid"]="{${client_guid}}"
@@ -484,6 +483,101 @@ function update_ppp() {
     echo -e "${GREEN}PPP已更新到 ${version}${NC}"
 }
 
+# 修复 /dev/null 和危险日志配置
+function repair_ppp_env() {
+    echo -e "${YELLOW}修复PPP运行环境...${NC}"
+
+    systemctl stop ppp.service || true
+    pkill -f "${PPP_DIR}/ppp" || true
+
+    if [ -f "$CONFIG_FILE" ]; then
+        echo -e "${YELLOW}检查 .server.log 是否为危险值 /dev/null...${NC}"
+        local current_log_value
+        current_log_value=$(jq -r '.server.log // "__MISSING__"' "$CONFIG_FILE" 2>/dev/null || echo "unknown")
+        case "$current_log_value" in
+            "/dev/null")
+                echo -e "${YELLOW}发现危险配置 .server.log=/dev/null，删除该项以恢复程序默认日志路径（例如 ./ppp.log）...${NC}"
+                local tmp_config
+                tmp_config=$(mktemp)
+                if jq 'del(.server.log)' "$CONFIG_FILE" > "$tmp_config"; then
+                    mv "$tmp_config" "$CONFIG_FILE"
+                else
+                    rm -f "$tmp_config"
+                    echo -e "${RED}修复配置文件失败${NC}"
+                    return 1
+                fi
+                ;;
+            "__MISSING__")
+                echo -e "${YELLOW}当前未设置 .server.log，保持默认值不变${NC}"
+                ;;
+            "unknown")
+                echo -e "${RED}读取配置文件失败，无法判断 .server.log${NC}"
+                return 1
+                ;;
+            *)
+                echo -e "${YELLOW}当前 .server.log = ${current_log_value}，不是危险值，保持不变${NC}"
+                ;;
+        esac
+    else
+        echo -e "${YELLOW}未找到配置文件，跳过日志配置修复${NC}"
+    fi
+
+    echo -e "${YELLOW}重建 /dev/null 设备节点...${NC}"
+    rm -f /dev/null
+    mknod -m 666 /dev/null c 1 3
+    chown root:root /dev/null
+
+    echo -e "${YELLOW}重启PPP服务...${NC}"
+    systemctl start ppp.service
+
+    echo -e "${YELLOW}验证修复结果...${NC}"
+
+    local devnull_type
+    local devnull_perm
+    local log_after
+    local service_state
+
+    devnull_type=$(stat -c '%F' /dev/null 2>/dev/null || echo "unknown")
+    devnull_perm=$(stat -c '%a' /dev/null 2>/dev/null || echo "unknown")
+    if [ -f "$CONFIG_FILE" ]; then
+        log_after=$(jq -r '.server.log // "__MISSING__"' "$CONFIG_FILE" 2>/dev/null || echo "unknown")
+    else
+        log_after="__NO_CONFIG__"
+    fi
+    service_state=$(systemctl is-active ppp.service 2>/dev/null || true)
+
+    ls -l /dev/null
+    echo "server.log(after)=${log_after}"
+    echo "ppp.service=${service_state:-unknown}"
+
+    if [ "$devnull_type" != "character special file" ]; then
+        echo -e "${RED}修复失败: /dev/null 不是字符设备${NC}"
+        return 1
+    fi
+
+    if [ "$devnull_perm" != "666" ]; then
+        echo -e "${RED}修复失败: /dev/null 权限不是 666${NC}"
+        return 1
+    fi
+
+    if [ "$log_after" = "unknown" ]; then
+        echo -e "${RED}修复失败: 无法验证 .server.log${NC}"
+        return 1
+    fi
+
+    if [ "$log_after" = "/dev/null" ]; then
+        echo -e "${RED}修复失败: .server.log 仍然是 /dev/null${NC}"
+        return 1
+    fi
+
+    if [ "$service_state" != "active" ]; then
+        echo -e "${RED}修复失败: ppp.service 未成功启动${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}修复完成并验证通过${NC}"
+}
+
 # 查看会话
 function view_session() {
     if ! screen -list | grep -q "ppp"; then
@@ -644,10 +738,11 @@ function show_menu() {
         echo "6) 更新PPP"
         echo "7) 查看会话"
         echo "8) 配置管理"
-        echo "9) 退出"
+        echo "9) 修复 /dev/null 与日志配置"
+        echo "0) 退出"
 
         local choice
-        read -p "请输入选项 (1-9): " choice
+        read -p "请输入选项 (0-9): " choice
 
         case $choice in
             1) install_ppp ;;
@@ -664,7 +759,8 @@ function show_menu() {
             6) update_ppp ;;
             7) view_session ;;
             8) config_manage ;;
-            9)
+            9) repair_ppp_env ;;
+            0)
                 echo -e "${GREEN}退出脚本${NC}"
                 exit 0
                 ;;
