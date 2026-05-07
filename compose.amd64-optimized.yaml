@@ -1,0 +1,18 @@
+services:
+  openppp2:
+    image: ghcr.io/rebecca554owen/openppp2:latest
+    container_name: openppp2
+    restart: always
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./appsettings.json:/opt/appsettings.json
+    network_mode: host
+    environment:
+      ENABLE_TC: "false"
+      ENABLE_IO: "true"
+      ENABLE_SIMD: "true"
+    command: --mode=client --tun-host=no --tun-flash=yes --tun-ssmt=4/mq --tun-mux=0

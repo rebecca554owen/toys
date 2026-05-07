@@ -36,7 +36,17 @@ function install_dependencies() {
     
     case "$ID" in
         ubuntu|debian)
-            apt update && apt install -y file jq screen sudo unzip uuid-runtime wget
+            apt update && apt install -y \
+                file \
+                jq \
+                libatomic1 \
+                liburing2 \
+                libunwind8 \
+                screen \
+                sudo \
+                unzip \
+                uuid-runtime \
+                wget
             ;;
         *)
             echo -e "${RED}不支持的操作系统: ${ID}${NC}"
@@ -70,6 +80,33 @@ function get_latest_version() {
     echo "$latest_version"
 }
 
+# 获取指定版本的 release 信息
+function get_release_info() {
+    local version=$1
+
+    if [ "$version" == "latest" ] || [ "$version" == "$(get_latest_version)" ]; then
+        curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+    else
+        curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${version}"
+    fi
+}
+
+# 从 release 资产中解析第一个可用文件名
+function resolve_asset_name() {
+    local release_info=$1
+    shift
+
+    local candidate
+    for candidate in "$@"; do
+        if [ -n "$candidate" ] && echo "$release_info" | jq -e --arg name "$candidate" '.assets[]? | select(.name == $name)' >/dev/null; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 # 下载和解压PPP
 function download_and_extract() {
     local version=$1
@@ -79,11 +116,7 @@ function download_and_extract() {
     
     # 获取下载URL
     local release_info
-    if [ "$version" == "$(get_latest_version)" ]; then
-        release_info=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest")
-    else
-        release_info=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${version}")
-    fi
+    release_info=$(get_release_info "$version")
     
     local download_url=$(echo "$release_info" | jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .browser_download_url')
     
@@ -122,48 +155,138 @@ function download_and_extract() {
 function select_download_version() {
     local version=$1
     local use_io_uring=$2
-    
+
+    local choices=()
+    local labels=()
+    local default_choice=1
+    local release_info
+
+    release_info=$(get_release_info "$version")
+    if [ -z "$release_info" ] || [ "$(echo "$release_info" | jq -r '.tag_name // empty')" == "" ]; then
+        echo -e "${RED}无法获取版本信息: ${version}${NC}"
+        return 1
+    fi
+
     # 根据架构确定可用版本
-    local assets=()
     if [ "$ARCH" == "x86_64" ]; then
-        assets=(
-            "openppp2-linux-amd64-io-uring-simd.zip"
-            "openppp2-linux-amd64-io-uring.zip"
-            "openppp2-linux-amd64-simd.zip"
-            "openppp2-linux-amd64.zip"
-        )
+        local asset_name
+
+        asset_name=$(resolve_asset_name "$release_info" \
+            "openppp2-linux-amd64-io-uring-simd.zip")
+        if [ -n "$asset_name" ]; then
+            choices+=("$asset_name")
+            labels+=("IO_URING + SIMD 优化版")
+        fi
+
+        asset_name=$(resolve_asset_name "$release_info" \
+            "openppp2-linux-amd64-simd.zip")
+        if [ -n "$asset_name" ]; then
+            choices+=("$asset_name")
+            labels+=("SIMD 优化版")
+        fi
+
+        asset_name=$(resolve_asset_name "$release_info" \
+            "openppp2-linux-amd64-io-uring.zip")
+        if [ -n "$asset_name" ]; then
+            choices+=("$asset_name")
+            labels+=("IO_URING 优化版")
+        fi
+
+        asset_name=$(resolve_asset_name "$release_info" \
+            "openppp2-linux-amd64.zip")
+        if [ -n "$asset_name" ]; then
+            choices+=("$asset_name")
+            labels+=("标准版")
+        fi
+
+        asset_name=$(resolve_asset_name "$release_info" \
+            "openppp2-linux-amd64-tc-io-uring-simd.zip")
+        if [ -n "$asset_name" ]; then
+            choices+=("$asset_name")
+            labels+=("TC + IO_URING + SIMD 优化版")
+        fi
+
+        asset_name=$(resolve_asset_name "$release_info" \
+            "openppp2-linux-amd64-tc-simd.zip")
+        if [ -n "$asset_name" ]; then
+            choices+=("$asset_name")
+            labels+=("TC + SIMD 优化版")
+        fi
+
+        asset_name=$(resolve_asset_name "$release_info" \
+            "openppp2-linux-amd64-tc-io-uring.zip")
+        if [ -n "$asset_name" ]; then
+            choices+=("$asset_name")
+            labels+=("TC + IO_URING 优化版")
+        fi
+
+        asset_name=$(resolve_asset_name "$release_info" \
+            "openppp2-linux-amd64-tc.zip")
+        if [ -n "$asset_name" ]; then
+            choices+=("$asset_name")
+            labels+=("TC 优化版")
+        fi
     elif [ "$ARCH" == "aarch64" ]; then
-        assets=(
-            "openppp2-linux-aarch64-io-uring-simd.zip"
-            "openppp2-linux-aarch64-io-uring.zip"
-            "openppp2-linux-aarch64-simd.zip"
-            "openppp2-linux-aarch64.zip"
-        )
+        local standard_asset
+        local io_asset
+
+        standard_asset=$(resolve_asset_name "$release_info" \
+            "openppp2-linux-aarch64.zip" \
+            "openppp2-linux-arm64.zip")
+        if [ -n "$standard_asset" ]; then
+            choices+=("$standard_asset")
+            labels+=("标准版")
+        fi
+
+        io_asset=$(resolve_asset_name "$release_info" \
+            "openppp2-linux-aarch64-io-uring.zip" \
+            "openppp2-linux-arm64-io-uring.zip")
+        if [ -n "$io_asset" ]; then
+            choices+=("$io_asset")
+            labels+=("IO_URING 优化版")
+        fi
     else
         echo -e "${RED}不支持的架构: ${ARCH}${NC}"
         return 1
     fi
-    
-    # 显示版本选择菜单
+
+    if [ ${#choices[@]} -eq 0 ]; then
+        echo -e "${RED}版本 ${version} 没有找到适用于当前架构 ${ARCH} 的安装包${NC}"
+        return 1
+    fi
+
     echo -e "\n${GREEN}请选择要下载的版本类型:${NC}"
-    echo "1) IO_URING + SIMD 优化版 (最高性能)"
-    echo "2) IO_URING 优化版"
-    echo "3) SIMD 优化版"
-    echo "4) 标准版"
+    if [ "$use_io_uring" != "true" ]; then
+        echo -e "${YELLOW}提示: 当前内核版本低于 5.10，IO_URING 相关版本可能无法正常工作${NC}"
+    fi
+
+    local i=1
+    for label in "${labels[@]}"; do
+        echo "${i}) ${label}"
+        i=$((i + 1))
+    done
     echo "0) 取消"
 
+    local max_choice=${#choices[@]}
     local choice
-    read -p "输入选择 (0-4)，默认 1: " choice
-    choice=${choice:-1}
-    
-    case $choice in
-        1) download_and_extract "$version" "${assets[0]}" ;;
-        2) download_and_extract "$version" "${assets[1]}" ;;
-        3) download_and_extract "$version" "${assets[2]}" ;;
-        4) download_and_extract "$version" "${assets[3]}" ;;
-        *) return 1 ;;
-    esac
-    
+    read -p "输入选择 (0-${max_choice})，默认 ${default_choice}: " choice
+    choice=${choice:-$default_choice}
+
+    if ! [[ "$choice" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}无效选择${NC}"
+        return 1
+    fi
+
+    if [ "$choice" -eq 0 ]; then
+        return 1
+    fi
+
+    if [ "$choice" -lt 1 ] || [ "$choice" -gt "$max_choice" ]; then
+        echo -e "${RED}无效选择${NC}"
+        return 1
+    fi
+
+    download_and_extract "$version" "${choices[$((choice - 1))]}"
     return $?
 }
 

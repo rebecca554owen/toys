@@ -1,0 +1,121 @@
+name: build-openppp2-linux-arm64
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '输入 openppp2 的 tag 名称'
+        required: true
+        default: 'v3.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Linux aarch64 ${{ matrix.suffix }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suffix: ""
+            enable_sysnat: "OFF"
+
+    env:
+      ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+
+    steps:
+    - name: Checkout openppp2 repository
+      uses: actions/checkout@v6
+      with:
+        repository: rebecca554owen/openppp2
+        path: openppp2
+        ref: inet6
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y --no-install-recommends \
+          build-essential cmake git zip unzip wget \
+          gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+    - name: Get openppp2 tag
+      id: get-tag
+      run: |
+        TAG="${{ github.event.inputs.tag }}"
+        DATE=$(TZ='Asia/Shanghai' date +'%Y%m%d')
+        echo "tag=${TAG}" >> $GITHUB_OUTPUT
+        echo "app_version=1.0.0-${DATE}" >> $GITHUB_OUTPUT
+
+    - name: Validate openppp2 tag
+      run: |
+        if [[ ! "${{ steps.get-tag.outputs.tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "错误：标签格式无效，应为v*.*.*"
+          exit 1
+        fi
+
+    - name: Set artifact name
+      run: |
+        echo "ARTIFACT_NAME=openppp2-linux-aarch64${{ matrix.suffix }}.zip" >> $GITHUB_ENV
+
+    - name: Set version in source code
+      run: |
+        APP_VERSION="${{ steps.get-tag.outputs.app_version }}"
+        cd openppp2
+        sed -i "s/#define PPP_APPLICATION_VERSION (\"[^\"]*\")/#define PPP_APPLICATION_VERSION (\"${APP_VERSION}\")/" ppp/stdafx.h
+
+    - name: Clone third-party environment
+      run: |
+        git clone --depth 1 https://github.com/liulilittle/openppp2-ubuntu-3rd-environment.git "$RUNNER_TEMP/3rd"
+
+    - name: Build libunwind for target
+      run: |
+        cd /tmp
+        wget -q https://github.com/libunwind/libunwind/releases/download/v1.8.1/libunwind-1.8.1.tar.gz
+        tar xf libunwind-1.8.1.tar.gz
+        cd libunwind-1.8.1
+        ./configure --host=aarch64-linux-gnu --prefix="$RUNNER_TEMP/libunwind" --disable-shared --enable-static
+        make -j "$(nproc)"
+        make install
+
+    - name: Build openppp2
+      run: |
+        cd openppp2
+        TP="$RUNNER_TEMP/3rd/aarch64"
+        mkdir -p build
+        cd build
+        cmake .. \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+          -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+          -DCMAKE_EXE_LINKER_FLAGS="-L$RUNNER_TEMP/libunwind/lib" \
+          -DTHIRD_PARTY_LIBRARY_DIR="$TP"
+        make -j "$(nproc)"
+
+    - name: Package openppp2
+      run: |
+        cd openppp2/bin
+        zip -r "${{ env.ARTIFACT_NAME }}" ppp
+
+    - name: Upload openppp2
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ env.ARTIFACT_NAME }}
+        path: openppp2/bin/${{ env.ARTIFACT_NAME }}
+
+    - name: Record build time
+      run: |
+        echo "BUILD_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+
+    - name: Create GitHub Release
+      uses: ncipollo/release-action@v1
+      with:
+        tag: ${{ steps.get-tag.outputs.tag }}
+        artifacts: openppp2/bin/${{ env.ARTIFACT_NAME }}
+        allowUpdates: true
+        replacesArtifacts: true
+        makeLatest: true
+        body: |
+          Version: ${{ steps.get-tag.outputs.app_version }}
+          Build Time: ${{ env.BUILD_TIME }}
