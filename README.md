@@ -24,12 +24,26 @@ bash <(curl -Ls https://raw.githubusercontent.com/rebecca554owen/toys/main/sh/v2
   NodeID=1 \
   NodeType=shadowsocks
 ```
-## compose.yaml 适用于openppp2
+## compose.yaml 适用于openppp2 默认版（AMD64 默认开启 SIMD）
 ```
 mkdir openppp2
 cd openppp2
 curl -Ls https://raw.githubusercontent.com/rebecca554owen/toys/main/compose.yaml
 docker compose up -d
+```
+## compose.amd64-optimized.yaml 适用于openppp2 IO 版（IO_URING + SIMD）
+```
+mkdir openppp2
+cd openppp2
+curl -Lo compose.amd64-optimized.yaml https://raw.githubusercontent.com/rebecca554owen/toys/main/compose.amd64-optimized.yaml
+docker compose -f compose.amd64-optimized.yaml up -d
+```
+## compose.tc.yaml 适用于openppp2 TC/SYSNAT 版（仅推荐 Linux 宿主机）
+```
+mkdir openppp2
+cd openppp2
+curl -Lo compose.tc.yaml https://raw.githubusercontent.com/rebecca554owen/toys/main/compose.tc.yaml
+docker compose -f compose.tc.yaml up -d
 ```
 ## miaospeed 后端docker run 一键启动
 ```
