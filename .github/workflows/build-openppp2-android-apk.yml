@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入 openppp2 的 tag 名称'
         required: true
-        default: 'v3.0.0'
+        default: 'v4.0.0'
 
 permissions:
   contents: write
@@ -18,7 +18,7 @@ jobs:
 
     env:
       NDK_VERSION: r20b
-      APK_NAME: openppp2-android-arm64-v8a.apk
+      APK_NAME: openppp2-arm64-v8a.apk
 
     steps:
     - name: Get openppp2 tag
