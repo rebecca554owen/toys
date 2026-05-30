@@ -198,9 +198,37 @@ function select_download_version() {
         return 1
     fi
 
-    # 根据架构确定可用版本
+    # 根据架构确定可用版本。x86_64 优先推荐 TC 版本，客户端/服务端均可使用同一二进制。
     if [ "$ARCH" == "x86_64" ]; then
         local asset_name
+
+        asset_name=$(resolve_asset_name "$release_info" \
+            "openppp2-linux-amd64-tc-io-uring-simd.zip")
+        if [ -n "$asset_name" ]; then
+            choices+=("$asset_name")
+            labels+=("TC + IO_URING + SIMD 优化版（推荐）")
+        fi
+
+        asset_name=$(resolve_asset_name "$release_info" \
+            "openppp2-linux-amd64-tc-simd.zip")
+        if [ -n "$asset_name" ]; then
+            choices+=("$asset_name")
+            labels+=("TC + SIMD 优化版")
+        fi
+
+        asset_name=$(resolve_asset_name "$release_info" \
+            "openppp2-linux-amd64-tc-io-uring.zip")
+        if [ -n "$asset_name" ]; then
+            choices+=("$asset_name")
+            labels+=("TC + IO_URING 优化版")
+        fi
+
+        asset_name=$(resolve_asset_name "$release_info" \
+            "openppp2-linux-amd64-tc.zip")
+        if [ -n "$asset_name" ]; then
+            choices+=("$asset_name")
+            labels+=("TC 优化版")
+        fi
 
         asset_name=$(resolve_asset_name "$release_info" \
             "openppp2-linux-amd64-io-uring-simd.zip")
@@ -228,34 +256,6 @@ function select_download_version() {
         if [ -n "$asset_name" ]; then
             choices+=("$asset_name")
             labels+=("标准版")
-        fi
-
-        asset_name=$(resolve_asset_name "$release_info" \
-            "openppp2-linux-amd64-tc-io-uring-simd.zip")
-        if [ -n "$asset_name" ]; then
-            choices+=("$asset_name")
-            labels+=("TC + IO_URING + SIMD 优化版")
-        fi
-
-        asset_name=$(resolve_asset_name "$release_info" \
-            "openppp2-linux-amd64-tc-simd.zip")
-        if [ -n "$asset_name" ]; then
-            choices+=("$asset_name")
-            labels+=("TC + SIMD 优化版")
-        fi
-
-        asset_name=$(resolve_asset_name "$release_info" \
-            "openppp2-linux-amd64-tc-io-uring.zip")
-        if [ -n "$asset_name" ]; then
-            choices+=("$asset_name")
-            labels+=("TC + IO_URING 优化版")
-        fi
-
-        asset_name=$(resolve_asset_name "$release_info" \
-            "openppp2-linux-amd64-tc.zip")
-        if [ -n "$asset_name" ]; then
-            choices+=("$asset_name")
-            labels+=("TC 优化版")
         fi
     elif [ "$ARCH" == "aarch64" ]; then
         local standard_asset
@@ -939,7 +939,7 @@ if [ "$(id -u)" -ne 0 ]; then
     echo -e "${RED}错误: 此脚本需要root权限${NC}"
     exit 1
 fi
-echo -e "${GREEN}PPP2 管理脚本 版本: ${NC}${RED} v1.0.2 ${NC}"
+echo -e "${GREEN}PPP2 管理脚本 版本: ${NC}${RED} v1.0.3 ${NC}"
 echo -e "${GREEN}作者: 周宇航${NC}"
 init_system_info
 show_menu
