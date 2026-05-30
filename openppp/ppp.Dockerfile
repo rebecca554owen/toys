@@ -157,6 +157,11 @@ WORKDIR /opt
 ENV ENABLE_IO=false
 ENV ENABLE_SIMD=false
 ENV ENABLE_TC=false
+ENV ENABLE_BYPASS=false
+ENV BYPASS_COUNTRY=CN
+ENV BYPASS_IPLIST_PATH=/opt/ip.txt
+ENV BYPASS_REFRESH=true
+ENV BYPASS_PULL_ON_START=true
 
 # 安装运行时依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \

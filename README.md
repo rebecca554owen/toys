@@ -45,6 +45,9 @@ cd openppp2
 curl -Lo compose.tc.yaml https://raw.githubusercontent.com/rebecca554owen/toys/main/compose.tc.yaml
 docker compose -f compose.tc.yaml up -d
 ```
+### openppp2 compose 自动分流
+compose 示例默认开启 `ENABLE_BYPASS=true`，容器启动时会先执行 `--pull-iplist` 拉取 `BYPASS_COUNTRY=CN` 的 IP 列表到 `BYPASS_IPLIST_PATH=/opt/ip.txt`，然后启动客户端时自动追加 `--bypass=/opt/ip.txt`。`BYPASS_REFRESH=true` 时还会追加 `--virr=/opt/ip.txt<CN`，由 openppp2 定期刷新并应用分流列表。
+
 ## miaospeed 后端docker run 一键启动
 ```
 docker run -d --name miaospeed-koipy --restart always --network host airportr/miaospeed:latest server -bind [::]:8766 -mtls -connthread 64 -token fulltclash -ipv6
