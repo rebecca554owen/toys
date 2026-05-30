@@ -171,6 +171,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libunwind8 \
     lsof \
     net-tools && \
+    (apt-get install -y --no-install-recommends libbpf1 || apt-get install -y --no-install-recommends libbpf0) && \
+    libbpf1_path="$(ldconfig -p 2>/dev/null | awk '/libbpf.so.1 / { print $NF; exit }')" && \
+    if [ -n "$libbpf1_path" ] && ! ldconfig -p 2>/dev/null | grep -q 'libbpf.so.0'; then \
+        ln -sf "$libbpf1_path" "$(dirname "$libbpf1_path")/libbpf.so.0"; \
+        ldconfig; \
+    fi && \
     rm -rf /var/lib/apt/lists/*
 
 # 从下载阶段复制二进制文件
