@@ -2,11 +2,12 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.2.5"
+SCRIPT_VERSION="1.2.7"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr-optimization.conf"
 FINAL_SYSCTL_CONF="/etc/sysctl.conf"
 UCP_REPO_URL="https://github.com/rebecca554owen/ucp.git"
 UCP_SRC_DIR="/usr/local/src/tcp_ucp"
+BBR_SRC_DIR="$UCP_SRC_DIR/google"
 FINAL_OVERRIDE_BEGIN="# BEGIN bbr.sh final override"
 FINAL_OVERRIDE_END="# END bbr.sh final override"
 
@@ -30,6 +31,16 @@ get_ucp_module_status() {
     if lsmod 2>/dev/null | grep -qw tcp_ucp; then
         echo "已加载"
     elif command -v modinfo >/dev/null 2>&1 && modinfo tcp_ucp >/dev/null 2>&1; then
+        echo "已安装未加载"
+    else
+        echo "未安装"
+    fi
+}
+
+get_bbr_module_status() {
+    if lsmod 2>/dev/null | grep -qw tcp_bbr; then
+        echo "已加载"
+    elif command -v modinfo >/dev/null 2>&1 && modinfo tcp_bbr >/dev/null 2>&1; then
         echo "已安装未加载"
     else
         echo "未安装"
@@ -65,9 +76,9 @@ get_system_info() {
     echo "可用拥塞控制: $available_controls"
 
     if has_congestion_control bbr; then
-        echo "BBR 状态: 可用"
+        echo "BBR 状态: 可用 ($(get_bbr_module_status))"
     else
-        echo "BBR 状态: 不可用"
+        echo "BBR 状态: 不可用 ($(get_bbr_module_status))"
     fi
 
     if has_congestion_control ucp; then
@@ -174,9 +185,9 @@ prompt_kernel_update_if_headers_missing() {
     echo "当前运行内核缺少构建目录: /lib/modules/$(uname -r)/build"
     echo "这通常表示当前内核对应 headers 已不在软件源中，或尚未安装。"
     echo "可以安装软件源提供的最新内核和 headers，重启后再回来编译 UCP。"
-    read -p "是否安装/更新最新内核和 headers？[y/N]: " update_kernel
+    read -p "是否安装/更新最新内核和 headers？[Y/n]: " update_kernel
     case $update_kernel in
-        y|Y)
+        ""|y|Y)
             install_kernel_update_for_headers || {
                 echo "内核和 headers 更新失败，请手动处理后重试。"
                 return 1
@@ -254,15 +265,114 @@ install_ucp_module_file() {
     depmod "$(uname -r)" || return 1
 }
 
+build_kernel_module() {
+    local source_dir=$1
+
+    make -C "/lib/modules/$(uname -r)/build" M="$source_dir" clean || return 1
+    make -C "/lib/modules/$(uname -r)/build" M="$source_dir" modules
+}
+
+reload_congestion_module() {
+    local module_name=$1
+    local congestion_name=$2
+    local old_congestion_control
+
+    old_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
+    if [ "$old_congestion_control" = "$congestion_name" ] && has_congestion_control cubic; then
+        sysctl -w net.ipv4.tcp_congestion_control=cubic || return 1
+    fi
+
+    modprobe -r "$module_name" 2>/dev/null || true
+    modprobe "$module_name" || return 1
+
+    if [ "$old_congestion_control" = "$congestion_name" ]; then
+        sysctl -w "net.ipv4.tcp_congestion_control=$congestion_name" || return 1
+    fi
+}
+
+install_bbr_module_file() {
+    local module_file="$BBR_SRC_DIR/tcp_bbr.ko"
+    local module_dir="/lib/modules/$(uname -r)/extra"
+
+    if [ ! -f "$module_file" ]; then
+        echo "未找到已编译模块: $module_file"
+        return 1
+    fi
+
+    echo "安装补丁 BBR 模块到: $module_dir"
+    mkdir -p "$module_dir" || return 1
+    install -m 0644 "$module_file" "$module_dir/tcp_bbr.ko" || return 1
+    depmod "$(uname -r)" || return 1
+}
+
+install_bbr_module() {
+    require_linux || return 1
+    require_root || return 1
+
+    echo "====== 编译/安装/更新补丁 BBR 模块 ======"
+    if ! check_ucp_build_requirements; then
+        read -p "检测到构建依赖缺失，是否尝试自动安装？[Y/n]: " install_deps
+        case $install_deps in
+            ""|y|Y)
+                install_build_dependencies || {
+                    echo "构建依赖安装失败，请手动安装后重试。"
+                    return 1
+                }
+                ;;
+            *)
+                echo "已取消补丁 BBR 安装。"
+                return 1
+                ;;
+        esac
+    fi
+
+    if ! kernel_build_tree_ready; then
+        prompt_kernel_update_if_headers_missing
+        return 1
+    fi
+
+    if ! check_ucp_build_requirements; then
+        echo "构建环境仍不完整，请确认 git、make、gcc 和当前内核 headers 已安装。"
+        return 1
+    fi
+
+    prepare_ucp_source || return 1
+    if [ ! -d "$BBR_SRC_DIR" ] || [ ! -f "$BBR_SRC_DIR/tcp_bbr.c" ]; then
+        echo "未找到补丁 BBR 源码目录: $BBR_SRC_DIR"
+        return 1
+    fi
+
+    echo "开始编译补丁 BBR..."
+    build_kernel_module "$BBR_SRC_DIR" || return 1
+
+    install_bbr_module_file || return 1
+
+    echo "加载 tcp_bbr 模块..."
+    if ! reload_congestion_module tcp_bbr bbr; then
+        echo "补丁 BBR 模块加载失败。若内核已内置 tcp_bbr 或启用了 Secure Boot，可能无法替换/加载未签名模块。"
+        return 1
+    fi
+
+    if has_congestion_control bbr; then
+        echo "补丁 BBR 安装并加载成功。"
+        echo
+        get_system_info
+        return 0
+    fi
+
+    echo "补丁 BBR 模块已尝试加载，但系统可用拥塞控制列表中未发现 bbr。"
+    return 1
+}
+
 install_ucp_module() {
     require_linux || return 1
     require_root || return 1
 
     echo "====== 编译/安装/更新 UCP 模块 ======"
     if ! check_ucp_build_requirements; then
-        read -p "检测到构建依赖缺失，是否尝试自动安装？[y/N]: " install_deps
+        read -p "检测到构建依赖缺失，是否尝试自动安装？[Y/n]: " install_deps
         case $install_deps in
-            y|Y)
+            ""|y|Y)
                 install_build_dependencies || {
                     echo "构建依赖安装失败，请手动安装后重试。"
                     return 1
@@ -288,8 +398,7 @@ install_ucp_module() {
     prepare_ucp_source || return 1
 
     echo "开始编译 UCP..."
-    make -C "$UCP_SRC_DIR" clean || return 1
-    make -C "$UCP_SRC_DIR" || return 1
+    build_kernel_module "$UCP_SRC_DIR" || return 1
 
     echo "安装 UCP 模块..."
     if ! make -C "$UCP_SRC_DIR" install; then
@@ -298,7 +407,7 @@ install_ucp_module() {
     fi
 
     echo "加载 tcp_ucp 模块..."
-    if ! modprobe tcp_ucp; then
+    if ! reload_congestion_module tcp_ucp ucp; then
         echo "UCP 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名内核模块加载。"
         return 1
     fi
@@ -339,9 +448,9 @@ ensure_ucp_ready() {
     fi
 
     echo "UCP 未安装或未加载，无法直接应用 ucp + fq。"
-    read -p "是否立即编译/安装/加载 UCP 模块？[y/N]: " install_now
+    read -p "是否立即编译/安装/加载 UCP 模块？[Y/n]: " install_now
     case $install_now in
-        y|Y)
+        ""|y|Y)
             install_ucp_module
             ;;
         *)
@@ -349,6 +458,12 @@ ensure_ucp_ready() {
             return 1
             ;;
     esac
+}
+
+ensure_bbr_ready() {
+    echo "将使用 UCP 仓库 google/ 目录中的补丁 BBR 模块。"
+    install_bbr_module || return 1
+    ensure_congestion_control_available bbr
 }
 
 # 选择队列算法
@@ -409,6 +524,8 @@ apply_optimization() {
 
     if [ "$congestion_control" = "ucp" ]; then
         ensure_ucp_ready || return 1
+    elif [ "$congestion_control" = "bbr" ]; then
+        ensure_bbr_ready || return 1
     elif ! ensure_congestion_control_available "$congestion_control"; then
         echo "拥塞控制算法 $congestion_control 不可用，未写入配置。"
         return 1
@@ -582,10 +699,11 @@ menu() {
         echo "2. 应用 UCP 优化 (ucp + fq)"
         echo "3. 自定义优化方案"
         echo "4. 编译/安装/更新 UCP 模块"
-        echo "5. 重启系统"
-        echo "6. 清理优化配置"
+        echo "5. 编译/安装/更新补丁 BBR 模块"
+        echo "6. 重启系统"
+        echo "7. 清理优化配置"
         echo "0. 退出"
-        read -p "请输入选项 [0-6]: " option
+        read -p "请输入选项 [0-7]: " option
 
         case $option in
             1)
@@ -602,9 +720,12 @@ menu() {
                 install_ucp_module
                 ;;
             5)
-                require_root && systemctl reboot
+                install_bbr_module
                 ;;
             6)
+                require_root && systemctl reboot
+                ;;
+            7)
                 cleanup
                 ;;
             0)
