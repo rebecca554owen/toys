@@ -37,9 +37,11 @@ function install_dependencies() {
     case "$ID" in
         ubuntu|debian)
             apt update && apt install -y \
+                curl \
                 file \
                 jq \
                 libatomic1 \
+                libbpf1 \
                 liburing2 \
                 libunwind8 \
                 screen \
@@ -53,6 +55,35 @@ function install_dependencies() {
             exit 1
             ;;
     esac
+}
+
+# TC/SYSNAT release builds currently depend on libbpf.so.0. Debian 12 ships
+# libbpf.so.1, which is ABI-compatible for the symbols used here.
+function ensure_libbpf0_compat() {
+    if ldconfig -p 2>/dev/null | grep -q 'libbpf.so.0' || \
+        [ -e /lib/x86_64-linux-gnu/libbpf.so.0 ] || \
+        [ -e /usr/lib/x86_64-linux-gnu/libbpf.so.0 ]; then
+        return 0
+    fi
+
+    local libbpf1_path
+    libbpf1_path=$(ldconfig -p 2>/dev/null | awk '/libbpf.so.1 / { print $NF; exit }')
+    if [ -z "$libbpf1_path" ]; then
+        echo -e "${RED}缺少 libbpf 运行库，无法运行 TC 版本${NC}"
+        return 1
+    fi
+
+    local compat_path
+    compat_path="$(dirname "$libbpf1_path")/libbpf.so.0"
+
+    echo -e "${YELLOW}未找到 libbpf.so.0，创建 libbpf.so.1 兼容链接...${NC}"
+    ln -sf "$libbpf1_path" "$compat_path"
+    ldconfig
+
+    if [ ! -e "$compat_path" ]; then
+        echo -e "${RED}libbpf.so.0 兼容链接创建失败${NC}"
+        return 1
+    fi
 }
 
 # 检查IO_URING支持
@@ -286,7 +317,14 @@ function select_download_version() {
         return 1
     fi
 
-    download_and_extract "$version" "${choices[$((choice - 1))]}"
+    local selected_asset="${choices[$((choice - 1))]}"
+    if [[ "$selected_asset" == *"-tc"* ]]; then
+        if ! ensure_libbpf0_compat; then
+            return 1
+        fi
+    fi
+
+    download_and_extract "$version" "$selected_asset"
     return $?
 }
 
@@ -901,7 +939,7 @@ if [ "$(id -u)" -ne 0 ]; then
     echo -e "${RED}错误: 此脚本需要root权限${NC}"
     exit 1
 fi
-echo -e "${GREEN}PPP2 管理脚本 版本: ${NC}${RED} v1.0.1 ${NC}"
+echo -e "${GREEN}PPP2 管理脚本 版本: ${NC}${RED} v1.0.2 ${NC}"
 echo -e "${GREEN}作者: 周宇航${NC}"
 init_system_info
 show_menu
