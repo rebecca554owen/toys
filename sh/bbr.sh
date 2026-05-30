@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.2.4"
+SCRIPT_VERSION="1.2.5"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr-optimization.conf"
 FINAL_SYSCTL_CONF="/etc/sysctl.conf"
 UCP_REPO_URL="https://github.com/rebecca554owen/ucp.git"
@@ -206,7 +206,32 @@ prepare_ucp_source() {
 
     if [ -d "$UCP_SRC_DIR/.git" ]; then
         echo "更新 UCP 源码: $UCP_SRC_DIR"
-        git -C "$UCP_SRC_DIR" pull --ff-only
+        if git -C "$UCP_SRC_DIR" pull --ff-only; then
+            return 0
+        fi
+
+        echo "常规 fast-forward 更新失败，尝试对齐远端分支。"
+        if [ -n "$(git -C "$UCP_SRC_DIR" status --porcelain --untracked-files=no)" ]; then
+            echo "UCP 源码目录存在本地改动，为避免覆盖，请先手动处理: $UCP_SRC_DIR"
+            return 1
+        fi
+
+        local current_branch upstream_ref
+        current_branch=$(git -C "$UCP_SRC_DIR" branch --show-current)
+        upstream_ref=$(git -C "$UCP_SRC_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)
+        if [ -z "$upstream_ref" ] && [ -n "$current_branch" ]; then
+            upstream_ref="origin/$current_branch"
+        fi
+        if [ -z "$upstream_ref" ]; then
+            upstream_ref="origin/main"
+        fi
+
+        git -C "$UCP_SRC_DIR" fetch --prune origin || return 1
+        if ! git -C "$UCP_SRC_DIR" rev-parse --verify "$upstream_ref" >/dev/null 2>&1; then
+            echo "无法找到远端分支: $upstream_ref"
+            return 1
+        fi
+        git -C "$UCP_SRC_DIR" reset --hard "$upstream_ref"
     else
         echo "克隆 UCP 源码到: $UCP_SRC_DIR"
         rm -rf "$UCP_SRC_DIR"
