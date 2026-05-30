@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.2.8"
+SCRIPT_VERSION="1.2.9"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr-optimization.conf"
 FINAL_SYSCTL_CONF="/etc/sysctl.conf"
 UCP_REPO_URL="https://github.com/rebecca554owen/ucp.git"
@@ -417,10 +417,7 @@ install_ucp_module() {
     build_kernel_module "$UCP_SRC_DIR" || return 1
 
     echo "安装 UCP 模块..."
-    if ! make -C "$UCP_SRC_DIR" install; then
-        echo "make install 失败，尝试手动安装当前内核模块。"
-        install_ucp_module_file || return 1
-    fi
+    install_ucp_module_file || return 1
 
     echo "加载 tcp_ucp 模块..."
     if ! reload_congestion_module tcp_ucp ucp; then
