@@ -2,17 +2,17 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.2.7"
+SCRIPT_VERSION="1.2.8"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr-optimization.conf"
 FINAL_SYSCTL_CONF="/etc/sysctl.conf"
 UCP_REPO_URL="https://github.com/rebecca554owen/ucp.git"
 UCP_SRC_DIR="/usr/local/src/tcp_ucp"
-BBR_SRC_DIR="$UCP_SRC_DIR/google"
+PATCHED_BBR_SRC_DIR="$UCP_SRC_DIR/google/patch"
 FINAL_OVERRIDE_BEGIN="# BEGIN bbr.sh final override"
 FINAL_OVERRIDE_END="# END bbr.sh final override"
 
 qdisc="fq"
-congestion_control="bbr"
+congestion_control="bbr1"
 
 get_sysctl_value() {
     sysctl -n "$1" 2>/dev/null || echo "未知"
@@ -41,6 +41,16 @@ get_bbr_module_status() {
     if lsmod 2>/dev/null | grep -qw tcp_bbr; then
         echo "已加载"
     elif command -v modinfo >/dev/null 2>&1 && modinfo tcp_bbr >/dev/null 2>&1; then
+        echo "已安装未加载"
+    else
+        echo "未安装"
+    fi
+}
+
+get_patched_bbr_module_status() {
+    if lsmod 2>/dev/null | grep -qw tcp_bbr1; then
+        echo "已加载"
+    elif command -v modinfo >/dev/null 2>&1 && modinfo tcp_bbr1 >/dev/null 2>&1; then
         echo "已安装未加载"
     else
         echo "未安装"
@@ -79,6 +89,12 @@ get_system_info() {
         echo "BBR 状态: 可用 ($(get_bbr_module_status))"
     else
         echo "BBR 状态: 不可用 ($(get_bbr_module_status))"
+    fi
+
+    if has_congestion_control bbr1; then
+        echo "补丁 BBR1 状态: 可用 ($(get_patched_bbr_module_status))"
+    else
+        echo "补丁 BBR1 状态: 不可用 ($(get_patched_bbr_module_status))"
     fi
 
     if has_congestion_control ucp; then
@@ -291,7 +307,7 @@ reload_congestion_module() {
 }
 
 install_bbr_module_file() {
-    local module_file="$BBR_SRC_DIR/tcp_bbr.ko"
+    local module_file="$PATCHED_BBR_SRC_DIR/tcp_bbr1.ko"
     local module_dir="/lib/modules/$(uname -r)/extra"
 
     if [ ! -f "$module_file" ]; then
@@ -301,7 +317,7 @@ install_bbr_module_file() {
 
     echo "安装补丁 BBR 模块到: $module_dir"
     mkdir -p "$module_dir" || return 1
-    install -m 0644 "$module_file" "$module_dir/tcp_bbr.ko" || return 1
+    install -m 0644 "$module_file" "$module_dir/tcp_bbr1.ko" || return 1
     depmod "$(uname -r)" || return 1
 }
 
@@ -337,30 +353,30 @@ install_bbr_module() {
     fi
 
     prepare_ucp_source || return 1
-    if [ ! -d "$BBR_SRC_DIR" ] || [ ! -f "$BBR_SRC_DIR/tcp_bbr.c" ]; then
-        echo "未找到补丁 BBR 源码目录: $BBR_SRC_DIR"
+    if [ ! -d "$PATCHED_BBR_SRC_DIR" ] || [ ! -f "$PATCHED_BBR_SRC_DIR/tcp_bbr1.c" ]; then
+        echo "未找到补丁 BBR 源码目录: $PATCHED_BBR_SRC_DIR"
         return 1
     fi
 
     echo "开始编译补丁 BBR..."
-    build_kernel_module "$BBR_SRC_DIR" || return 1
+    build_kernel_module "$PATCHED_BBR_SRC_DIR" || return 1
 
     install_bbr_module_file || return 1
 
-    echo "加载 tcp_bbr 模块..."
-    if ! reload_congestion_module tcp_bbr bbr; then
-        echo "补丁 BBR 模块加载失败。若内核已内置 tcp_bbr 或启用了 Secure Boot，可能无法替换/加载未签名模块。"
+    echo "加载 tcp_bbr1 模块..."
+    if ! reload_congestion_module tcp_bbr1 bbr1; then
+        echo "补丁 BBR 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名模块加载。"
         return 1
     fi
 
-    if has_congestion_control bbr; then
+    if has_congestion_control bbr1; then
         echo "补丁 BBR 安装并加载成功。"
         echo
         get_system_info
         return 0
     fi
 
-    echo "补丁 BBR 模块已尝试加载，但系统可用拥塞控制列表中未发现 bbr。"
+    echo "补丁 BBR 模块已尝试加载，但系统可用拥塞控制列表中未发现 bbr1。"
     return 1
 }
 
@@ -434,6 +450,9 @@ ensure_congestion_control_available() {
         bbr)
             modprobe tcp_bbr 2>/dev/null || true
             ;;
+        bbr1)
+            modprobe tcp_bbr1 2>/dev/null || true
+            ;;
         ucp)
             modprobe tcp_ucp 2>/dev/null || true
             ;;
@@ -461,17 +480,17 @@ ensure_ucp_ready() {
 }
 
 ensure_bbr_ready() {
-    echo "将使用 UCP 仓库 google/ 目录中的补丁 BBR 模块。"
+    echo "将使用 UCP 仓库 google/patch 目录中的补丁 BBR1 模块。"
     install_bbr_module || return 1
-    ensure_congestion_control_available bbr
+    ensure_congestion_control_available bbr1
 }
 
 # 选择队列算法
 select_qdisc() {
     echo "请选择队列算法组合:"
-    echo "1. bbr + fq (默认)"
-    echo "2. bbr + fq_pie"
-    echo "3. bbr + cake"
+    echo "1. bbr1 + fq (默认，补丁 BBR)"
+    echo "2. bbr1 + fq_pie"
+    echo "3. bbr1 + cake"
     echo "4. ucp + fq (推荐)"
     echo "5. ucp + cake (高级)"
     echo "6. ucp + fq_pie (高级)"
@@ -480,15 +499,15 @@ select_qdisc() {
     case $choice in
         1|"")
             qdisc="fq"
-            congestion_control="bbr"
+            congestion_control="bbr1"
             ;;
         2)
             qdisc="fq_pie"
-            congestion_control="bbr"
+            congestion_control="bbr1"
             ;;
         3)
             qdisc="cake"
-            congestion_control="bbr"
+            congestion_control="bbr1"
             ;;
         4)
             qdisc="fq"
@@ -505,9 +524,9 @@ select_qdisc() {
             congestion_control="ucp"
             ;;
         *)
-            echo "无效选择，使用默认值 bbr + fq"
+            echo "无效选择，使用默认值 bbr1 + fq"
             qdisc="fq"
-            congestion_control="bbr"
+            congestion_control="bbr1"
             ;;
     esac
 }
@@ -524,7 +543,7 @@ apply_optimization() {
 
     if [ "$congestion_control" = "ucp" ]; then
         ensure_ucp_ready || return 1
-    elif [ "$congestion_control" = "bbr" ]; then
+    elif [ "$congestion_control" = "bbr1" ]; then
         ensure_bbr_ready || return 1
     elif ! ensure_congestion_control_available "$congestion_control"; then
         echo "拥塞控制算法 $congestion_control 不可用，未写入配置。"
@@ -695,7 +714,7 @@ cleanup() {
 menu() {
     while true; do
         echo "====== 系统优化菜单 ======"
-        echo "1. 应用 BBR 优化 (bbr + fq)"
+        echo "1. 应用补丁 BBR 优化 (bbr1 + fq)"
         echo "2. 应用 UCP 优化 (ucp + fq)"
         echo "3. 自定义优化方案"
         echo "4. 编译/安装/更新 UCP 模块"
@@ -707,7 +726,7 @@ menu() {
 
         case $option in
             1)
-                apply_optimization "fq" "bbr"
+                apply_optimization "fq" "bbr1"
                 ;;
             2)
                 apply_optimization "fq" "ucp"
