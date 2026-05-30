@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.2.9"
+SCRIPT_VERSION="1.3.0"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr-optimization.conf"
 FINAL_SYSCTL_CONF="/etc/sysctl.conf"
 UCP_REPO_URL="https://github.com/rebecca554owen/ucp.git"
@@ -105,6 +105,21 @@ get_system_info() {
     echo "====================="
 }
 
+show_current_scheme() {
+    local current_qdisc current_cc available_controls
+
+    current_qdisc=$(get_sysctl_value net.core.default_qdisc)
+    current_cc=$(get_sysctl_value net.ipv4.tcp_congestion_control)
+    available_controls=$(get_available_congestion_controls)
+
+    echo "====== 当前方案 ======"
+    echo "队列规则: $current_qdisc"
+    echo "拥塞控制: $current_cc"
+    echo "可用算法: $available_controls"
+    echo "UCP: $(get_ucp_module_status) | BBR1: $(get_patched_bbr_module_status) | BBR: $(get_bbr_module_status)"
+    echo "====================="
+}
+
 install_packages() {
     local packages=("$@")
 
@@ -189,6 +204,36 @@ check_ucp_build_requirements() {
     return "$missing"
 }
 
+ensure_build_environment() {
+    local action_name=$1
+
+    if ! check_ucp_build_requirements; then
+        read -p "检测到构建依赖缺失，是否尝试自动安装？[Y/n]: " install_deps
+        case $install_deps in
+            ""|y|Y)
+                install_build_dependencies || {
+                    echo "构建依赖安装失败，请手动安装后重试。"
+                    return 1
+                }
+                ;;
+            *)
+                echo "已取消 $action_name。"
+                return 1
+                ;;
+        esac
+    fi
+
+    if ! kernel_build_tree_ready; then
+        prompt_kernel_update_if_headers_missing
+        return 1
+    fi
+
+    if ! check_ucp_build_requirements; then
+        echo "构建环境仍不完整，请确认 git、make、gcc 和当前内核 headers 已安装。"
+        return 1
+    fi
+}
+
 kernel_build_tree_ready() {
     [ -d "/lib/modules/$(uname -r)/build" ]
 }
@@ -209,7 +254,7 @@ prompt_kernel_update_if_headers_missing() {
                 return 1
             }
             echo "内核和 headers 已安装/更新。"
-            echo "请现在重启系统，重启后再次运行脚本并选择“编译/安装/更新 UCP 模块”。"
+            echo "请现在重启系统，重启后再次运行脚本并选择对应的“安装/更新”模块选项。"
             read -p "是否立即重启？[y/N]: " reboot_now
             case $reboot_now in
                 y|Y)
@@ -266,8 +311,10 @@ prepare_ucp_source() {
     fi
 }
 
-install_ucp_module_file() {
-    local module_file="$UCP_SRC_DIR/tcp_ucp.ko"
+install_module_file() {
+    local module_file=$1
+    local module_name=$2
+    local display_name=$3
     local module_dir="/lib/modules/$(uname -r)/extra"
 
     if [ ! -f "$module_file" ]; then
@@ -275,10 +322,14 @@ install_ucp_module_file() {
         return 1
     fi
 
-    echo "使用手动方式安装 UCP 模块到: $module_dir"
+    echo "安装 $display_name 模块到: $module_dir"
     mkdir -p "$module_dir" || return 1
-    install -m 0644 "$module_file" "$module_dir/tcp_ucp.ko" || return 1
+    install -m 0644 "$module_file" "$module_dir/$module_name.ko" || return 1
     depmod "$(uname -r)" || return 1
+}
+
+install_ucp_module_file() {
+    install_module_file "$UCP_SRC_DIR/tcp_ucp.ko" "tcp_ucp" "UCP"
 }
 
 build_kernel_module() {
@@ -307,18 +358,7 @@ reload_congestion_module() {
 }
 
 install_bbr_module_file() {
-    local module_file="$PATCHED_BBR_SRC_DIR/tcp_bbr1.ko"
-    local module_dir="/lib/modules/$(uname -r)/extra"
-
-    if [ ! -f "$module_file" ]; then
-        echo "未找到已编译模块: $module_file"
-        return 1
-    fi
-
-    echo "安装补丁 BBR 模块到: $module_dir"
-    mkdir -p "$module_dir" || return 1
-    install -m 0644 "$module_file" "$module_dir/tcp_bbr1.ko" || return 1
-    depmod "$(uname -r)" || return 1
+    install_module_file "$PATCHED_BBR_SRC_DIR/tcp_bbr1.ko" "tcp_bbr1" "补丁 BBR"
 }
 
 install_bbr_module() {
@@ -326,31 +366,7 @@ install_bbr_module() {
     require_root || return 1
 
     echo "====== 编译/安装/更新补丁 BBR 模块 ======"
-    if ! check_ucp_build_requirements; then
-        read -p "检测到构建依赖缺失，是否尝试自动安装？[Y/n]: " install_deps
-        case $install_deps in
-            ""|y|Y)
-                install_build_dependencies || {
-                    echo "构建依赖安装失败，请手动安装后重试。"
-                    return 1
-                }
-                ;;
-            *)
-                echo "已取消补丁 BBR 安装。"
-                return 1
-                ;;
-        esac
-    fi
-
-    if ! kernel_build_tree_ready; then
-        prompt_kernel_update_if_headers_missing
-        return 1
-    fi
-
-    if ! check_ucp_build_requirements; then
-        echo "构建环境仍不完整，请确认 git、make、gcc 和当前内核 headers 已安装。"
-        return 1
-    fi
+    ensure_build_environment "补丁 BBR 安装" || return 1
 
     prepare_ucp_source || return 1
     if [ ! -d "$PATCHED_BBR_SRC_DIR" ] || [ ! -f "$PATCHED_BBR_SRC_DIR/tcp_bbr1.c" ]; then
@@ -385,31 +401,7 @@ install_ucp_module() {
     require_root || return 1
 
     echo "====== 编译/安装/更新 UCP 模块 ======"
-    if ! check_ucp_build_requirements; then
-        read -p "检测到构建依赖缺失，是否尝试自动安装？[Y/n]: " install_deps
-        case $install_deps in
-            ""|y|Y)
-                install_build_dependencies || {
-                    echo "构建依赖安装失败，请手动安装后重试。"
-                    return 1
-                }
-                ;;
-            *)
-                echo "已取消 UCP 安装。"
-                return 1
-                ;;
-        esac
-    fi
-
-    if ! kernel_build_tree_ready; then
-        prompt_kernel_update_if_headers_missing
-        return 1
-    fi
-
-    if ! check_ucp_build_requirements; then
-        echo "构建环境仍不完整，请确认 git、make、gcc 和当前内核 headers 已安装。"
-        return 1
-    fi
+    ensure_build_environment "UCP 安装" || return 1
 
     prepare_ucp_source || return 1
 
@@ -477,53 +469,84 @@ ensure_ucp_ready() {
 }
 
 ensure_bbr_ready() {
+    if ensure_congestion_control_available bbr1; then
+        return 0
+    fi
+
+    echo "BBR1 未安装或未加载，无法直接应用 bbr1。"
     echo "将使用 UCP 仓库 google/patch 目录中的补丁 BBR1 模块。"
-    install_bbr_module || return 1
-    ensure_congestion_control_available bbr1
+    read -p "是否立即编译/安装/加载 BBR1 模块？[Y/n]: " install_now
+    case $install_now in
+        ""|y|Y)
+            install_bbr_module
+            ;;
+        *)
+            echo "已取消应用 BBR1。"
+            return 1
+            ;;
+    esac
 }
 
-# 选择队列算法
-select_qdisc() {
-    echo "请选择队列算法组合:"
-    echo "1. bbr1 + fq (默认，补丁 BBR)"
-    echo "2. bbr1 + fq_pie"
-    echo "3. bbr1 + cake"
-    echo "4. ucp + fq (推荐)"
-    echo "5. ucp + cake (高级)"
-    echo "6. ucp + fq_pie (高级)"
-    read -p "请输入选择 [1-6] (默认1): " choice
+# 应用优化方案
+apply_optimization_menu() {
+    local choice
+
+    echo "====== 应用优化方案 ======"
+    echo
+    echo "推荐:"
+    echo "1. ucp + fq (默认)"
+    echo
+    echo "UCP:"
+    echo "2. ucp + cake"
+    echo "3. ucp + fq_pie"
+    echo
+    echo "优化版 BBR:"
+    echo "4. bbr1 + fq"
+    echo "5. bbr1 + cake"
+    echo "6. bbr1 + fq_pie"
+    echo
+    echo "系统默认 BBR:"
+    echo "7. bbr + fq"
+    echo "8. bbr + cake"
+    echo "9. bbr + fq_pie"
+    echo
+    echo "0. 返回主菜单"
+    read -p "请输入选择 [0-9] (默认1): " choice
 
     case $choice in
         1|"")
-            qdisc="fq"
-            congestion_control="bbr1"
+            apply_optimization "fq" "ucp"
             ;;
         2)
-            qdisc="fq_pie"
-            congestion_control="bbr1"
+            apply_optimization "cake" "ucp"
             ;;
         3)
-            qdisc="cake"
-            congestion_control="bbr1"
+            apply_optimization "fq_pie" "ucp"
             ;;
         4)
-            qdisc="fq"
-            congestion_control="ucp"
+            apply_optimization "fq" "bbr1"
             ;;
         5)
-            echo "提示：UCP 默认推荐搭配 fq，cake 属于高级选项。"
-            qdisc="cake"
-            congestion_control="ucp"
+            apply_optimization "cake" "bbr1"
             ;;
         6)
-            echo "提示：UCP 默认推荐搭配 fq，fq_pie 属于高级选项。"
-            qdisc="fq_pie"
-            congestion_control="ucp"
+            apply_optimization "fq_pie" "bbr1"
+            ;;
+        7)
+            apply_optimization "fq" "bbr"
+            ;;
+        8)
+            apply_optimization "cake" "bbr"
+            ;;
+        9)
+            apply_optimization "fq_pie" "bbr"
+            ;;
+        0)
+            return 0
             ;;
         *)
-            echo "无效选择，使用默认值 bbr1 + fq"
-            qdisc="fq"
-            congestion_control="bbr1"
+            echo "无效选择，使用默认值 ucp + fq"
+            apply_optimization "fq" "ucp"
             ;;
     esac
 }
@@ -695,54 +718,40 @@ EOF
     get_system_info
 }
 
-# 清理优化
-cleanup() {
-    require_root || return 1
-    rm -f "$SYSCTL_CONF"
-    remove_final_sysctl_override || return 1
-    echo "已清理 $SYSCTL_CONF"
-    sysctl --system
-    echo "系统已重新加载配置"
-    echo
-    get_system_info
+restore_default_bbr() {
+    echo "恢复默认 BBR 方案: bbr + fq"
+    apply_optimization "fq" "bbr"
 }
 
 # 菜单
 menu() {
     while true; do
+        show_current_scheme
+        echo
         echo "====== 系统优化菜单 ======"
-        echo "1. 应用补丁 BBR 优化 (bbr1 + fq)"
-        echo "2. 应用 UCP 优化 (ucp + fq)"
-        echo "3. 自定义优化方案"
-        echo "4. 编译/安装/更新 UCP 模块"
-        echo "5. 编译/安装/更新补丁 BBR 模块"
-        echo "6. 重启系统"
-        echo "7. 清理优化配置"
+        echo "1. 安装/更新 UCP 模块"
+        echo "2. 安装/更新 BBR1 模块"
+        echo "3. 应用优化"
+        echo "4. 恢复默认 BBR (bbr + fq)"
+        echo "5. 重启系统"
         echo "0. 退出"
-        read -p "请输入选项 [0-7]: " option
+        read -p "请输入选项 [0-5]: " option
 
         case $option in
             1)
-                apply_optimization "fq" "bbr1"
-                ;;
-            2)
-                apply_optimization "fq" "ucp"
-                ;;
-            3)
-                select_qdisc
-                apply_optimization "$qdisc" "$congestion_control"
-                ;;
-            4)
                 install_ucp_module
                 ;;
-            5)
+            2)
                 install_bbr_module
                 ;;
-            6)
-                require_root && systemctl reboot
+            3)
+                apply_optimization_menu
                 ;;
-            7)
-                cleanup
+            4)
+                restore_default_bbr
+                ;;
+            5)
+                require_root && systemctl reboot
                 ;;
             0)
                 exit 0
@@ -755,7 +764,5 @@ menu() {
     done
 }
 
-# 显示系统信息
-get_system_info
 # 启动菜单
 menu
