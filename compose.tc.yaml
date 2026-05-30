@@ -22,8 +22,4 @@ services:
       ENABLE_IO: "false"
       ENABLE_SIMD: "false"
       ENABLE_BYPASS: "true"
-      BYPASS_COUNTRY: "CN"
-      BYPASS_IPLIST_PATH: "/opt/ip.txt"
-      BYPASS_REFRESH: "true"
-      BYPASS_PULL_ON_START: "true"
     command: --mode=client --tun-host=no --tun-flash=yes --tun-ssmt=4/mq --tun-mux=0
