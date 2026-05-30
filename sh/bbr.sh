@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.2.3"
+SCRIPT_VERSION="1.2.4"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr-optimization.conf"
 FINAL_SYSCTL_CONF="/etc/sysctl.conf"
 UCP_REPO_URL="https://github.com/rebecca554owen/ucp.git"
@@ -280,6 +280,8 @@ install_ucp_module() {
 
     if has_congestion_control ucp; then
         echo "UCP 安装并加载成功。"
+        echo
+        get_system_info
         return 0
     fi
 
@@ -531,6 +533,8 @@ EOF
     sysctl --system
     sysctl -w "net.core.default_qdisc=$qdisc" "net.ipv4.tcp_congestion_control=$congestion_control"
     echo "系统已重新加载配置"
+    echo
+    get_system_info
 }
 
 # 清理优化
@@ -541,6 +545,8 @@ cleanup() {
     echo "已清理 $SYSCTL_CONF"
     sysctl --system
     echo "系统已重新加载配置"
+    echo
+    get_system_info
 }
 
 # 菜单
