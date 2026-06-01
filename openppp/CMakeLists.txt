@@ -2,7 +2,7 @@ CMAKE_MINIMUM_REQUIRED(VERSION 3.0.0)
 
 # Define the solutions name.
 SET(NAME ppp)
-PROJECT(${NAME} C CXX) # CMAKE_CURRENT_SOURCE_DIR
+PROJECT(${NAME} VERSION 2.0.0.0 LANGUAGES C CXX) # CMAKE_CURRENT_SOURCE_DIR
 
 # C/CXX compiler configurations.
 SET(CMAKE_C_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-implicit-function-declaration")
@@ -14,6 +14,19 @@ SET(CMAKE_CXX_FLAGS "-fPIE -fvisibility=hidden -Wno-format -Wno-inconsistent-mis
 # ADD_DEFINITIONS(-DTRANSMISSION_O1)
 ADD_DEFINITIONS(-DJEMALLOC)
 ADD_DEFINITIONS(-DBUDDY_ALLOC_IMPLEMENTATION)
+
+OPTION(ENABLE_SYSNAT "Enable SYSNAT kernel-bypass traffic control (Linux only)" OFF)
+IF(ENABLE_SYSNAT)
+    ADD_DEFINITIONS(-DSYSNAT)
+ENDIF()
+
+# When compiling only linux kernel distributions >= 5.10 and later,
+# You can enable this macro to get the new io_uring asynchronous event driver model support.
+OPTION(ENABLE_IO_URING "Enable io_uring async event driver for Boost.Asio (Linux kernel >= 5.10)" OFF)
+IF(ENABLE_IO_URING AND PLATFORM_SYSTEM_LINUX)
+    ADD_DEFINITIONS(-DBOOST_ASIO_HAS_IO_URING=1)
+    ADD_DEFINITIONS(-DBOOST_ASIO_DISABLE_EPOLL=1)
+ENDIF()
 
 # When compiling with the musl-libc standard library, 
 # You need to define the _MUSL__ preprocessor macro to ensure correct compilation.
