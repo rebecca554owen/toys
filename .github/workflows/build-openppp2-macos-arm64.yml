@@ -1,0 +1,188 @@
+name: build-openppp2-macos-arm64
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '输入 openppp2 的 tag 名称'
+        required: true
+        default: 'v4.4.0'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-openppp2-macos-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BOOST_VERSION: 1.86.0
+  JEMALLOC_VERSION: 5.3.0
+  OPENSSL_VERSION: 4.0.0
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    name: macOS arm64
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout openppp2 repository
+        uses: actions/checkout@v6
+        with:
+          repository: rebecca554owen/openppp2
+          path: openppp2
+          ref: inet6
+
+      - name: Show runner architecture
+        run: |
+          uname -a
+          uname -m
+          sysctl -n machdep.cpu.brand_string || true
+          cmake --version
+          clang --version
+
+      - name: Install dependencies
+        run: |
+          brew update
+          brew install autoconf automake libtool ninja
+
+      - name: Get openppp2 tag
+        id: get-tag
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          DATE=$(TZ='Asia/Shanghai' date +'%Y%m%d%H%M%S')
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "app_version=2.0.0.0-${DATE}" >> $GITHUB_OUTPUT
+
+      - name: Validate openppp2 tag
+        run: |
+          if [[ ! "${{ steps.get-tag.outputs.tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "错误：标签格式无效，应为v*.*.*"
+            exit 1
+          fi
+
+      - name: Set version in source code
+        run: |
+          APP_VERSION="${{ steps.get-tag.outputs.app_version }}"
+          cd openppp2
+          sed -i '' "s/#define PPP_APPLICATION_VERSION (\"[^\"]*\")/#define PPP_APPLICATION_VERSION (\"${APP_VERSION}\")/" ppp/stdafx.h
+
+      - name: Cache third-party libraries
+        id: cache-third
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/third-party
+          key: macos-arm64-third-v2-boost${{ env.BOOST_VERSION }}-openssl${{ env.OPENSSL_VERSION }}-jemalloc${{ env.JEMALLOC_VERSION }}
+
+      - name: Build Boost
+        if: steps.cache-third.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          mkdir -p third-party && cd third-party
+          BOOST_VERSION_UNDERSCORE=$(echo "${{ env.BOOST_VERSION }}" | sed 's/\./_/g')
+          curl -L -o boost.tar.gz "https://archives.boost.io/release/${{ env.BOOST_VERSION }}/source/boost_${BOOST_VERSION_UNDERSCORE}.tar.gz"
+          tar -xzf boost.tar.gz
+          rm -rf boost boost.tar.gz
+          mv boost_* boost
+          cd boost
+          ./bootstrap.sh
+          ./b2 -j"$(sysctl -n hw.ncpu)" \
+            cxxflags="-fPIC -arch arm64" \
+            linkflags="-arch arm64" \
+            --with-system \
+            --with-filesystem \
+            --with-regex \
+            --with-thread \
+            --with-coroutine \
+            --with-context \
+            variant=release \
+            link=static \
+            threading=multi \
+            stage
+
+      - name: Build Jemalloc
+        if: steps.cache-third.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          mkdir -p third-party && cd third-party
+          curl -L -o jemalloc.tar.bz2 "https://github.com/jemalloc/jemalloc/releases/download/${{ env.JEMALLOC_VERSION }}/jemalloc-${{ env.JEMALLOC_VERSION }}.tar.bz2"
+          tar -xjf jemalloc.tar.bz2
+          rm -rf jemalloc jemalloc.tar.bz2
+          mv jemalloc-* jemalloc
+          cd jemalloc
+          ./autogen.sh --with-jemalloc-prefix=je_ --disable-shared --enable-static
+          make -j"$(sysctl -n hw.ncpu)"
+
+      - name: Build OpenSSL
+        if: steps.cache-third.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          mkdir -p third-party && cd third-party
+          curl -L -o openssl.tar.gz "https://github.com/openssl/openssl/releases/download/openssl-${{ env.OPENSSL_VERSION }}/openssl-${{ env.OPENSSL_VERSION }}.tar.gz"
+          tar -xzf openssl.tar.gz
+          rm -rf openssl openssl-src openssl.tar.gz
+          mv openssl-* openssl-src
+          cd openssl-src
+          ./Configure darwin64-arm64-cc no-shared no-tests no-module --prefix="$GITHUB_WORKSPACE/third-party/openssl"
+          make -j"$(sysctl -n hw.ncpu)"
+          make install_sw
+
+      - name: Normalize OpenSSL library layout
+        run: |
+          set -euxo pipefail
+          test -f third-party/openssl/lib/libssl.a
+          test -f third-party/openssl/lib/libcrypto.a
+          ln -sf lib/libssl.a third-party/openssl/libssl.a
+          ln -sf lib/libcrypto.a third-party/openssl/libcrypto.a
+          test -f third-party/openssl/libssl.a
+          test -f third-party/openssl/libcrypto.a
+
+      - name: Build openppp2
+        run: |
+          set -euxo pipefail
+          cd openppp2
+          TP="$GITHUB_WORKSPACE/third-party"
+          mkdir -p build
+          cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DTHIRD_PARTY_LIBRARY_DIR="$TP" \
+            -DENABLE_SYSNAT=OFF \\
+            -DENABLE_IO_URING=OFF \\
+            -DENABLE_SIMD=OFF \\
+            -G Ninja ..
+          ninja ppp
+
+      - name: Package openppp2
+        run: |
+          ARTIFACT_NAME=openppp2-darwin-arm64.zip
+          echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
+          cd openppp2/bin
+          zip -r "$ARTIFACT_NAME" ppp
+
+      - name: Upload openppp2
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: openppp2/bin/${{ env.ARTIFACT_NAME }}
+          if-no-files-found: error
+
+      - name: Record build time
+        run: |
+          echo "BUILD_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ steps.get-tag.outputs.tag }}
+          artifacts: openppp2/bin/${{ env.ARTIFACT_NAME }}
+          allowUpdates: true
+          replacesArtifacts: true
+          makeLatest: true
+          body: |
+            Version: ${{ steps.get-tag.outputs.app_version }}
+            Build Time: ${{ env.BUILD_TIME }}
