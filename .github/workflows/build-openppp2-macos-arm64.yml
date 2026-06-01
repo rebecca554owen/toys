@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入 openppp2 的 tag 名称'
         required: true
-        default: 'v4.4.0'
+        default: 'v4.5.0'
 
 permissions:
   contents: write
@@ -151,9 +151,9 @@ jobs:
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DTHIRD_PARTY_LIBRARY_DIR="$TP" \
-            -DENABLE_SYSNAT=OFF \\
-            -DENABLE_IO_URING=OFF \\
-            -DENABLE_SIMD=OFF \\
+            -DENABLE_SYSNAT=OFF \
+            -DENABLE_IO_URING=OFF \
+            -DENABLE_SIMD=OFF \
             -G Ninja ..
           ninja ppp
 
