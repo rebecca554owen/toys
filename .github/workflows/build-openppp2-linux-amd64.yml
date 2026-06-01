@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入 openppp2 的 tag 名称'
         required: true
-        default: 'v4.0.0'
+        default: 'v4.5.0'
 
 permissions:
   contents: write
@@ -79,9 +79,9 @@ jobs:
       id: get-tag
       run: |
         TAG="${{ github.event.inputs.tag }}"
-        DATE=$(TZ='Asia/Shanghai' date +'%Y%m%d')
+        DATE=$(TZ='Asia/Shanghai' date +'%Y%m%d%H%M%S')
         echo "tag=${TAG}" >> $GITHUB_OUTPUT
-        echo "app_version=1.0.0-${DATE}" >> $GITHUB_OUTPUT
+        echo "app_version=2.0.0.0-${DATE}" >> $GITHUB_OUTPUT
 
     - name: Validate openppp2 tag
       run: |
@@ -110,12 +110,12 @@ jobs:
     - name: Build Boost
       if: steps.cache-third.outputs.cache-hit != 'true'
       run: |
+        set -euxo pipefail
         mkdir -p third-party && cd third-party
         BOOST_VERSION_UNDERSCORE=$(echo "${{ env.BOOST_VERSION }}" | sed 's/\./_/g')
-        wget -q "https://archives.boost.io/release/${{ env.BOOST_VERSION }}/source/boost_${BOOST_VERSION_UNDERSCORE}.tar.bz2"
-        tar jxf boost_*.tar.bz2
-        rm -rf boost_*.tar.bz2
-        rm -rf boost
+        curl -L -o boost.tar.gz "https://archives.boost.io/release/${{ env.BOOST_VERSION }}/source/boost_${BOOST_VERSION_UNDERSCORE}.tar.gz"
+        tar -xzf boost.tar.gz
+        rm -rf boost boost.tar.gz
         mv boost_* boost
         cd boost
         ./bootstrap.sh
