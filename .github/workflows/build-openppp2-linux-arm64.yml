@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入 openppp2 的 tag 名称'
         required: true
-        default: 'v4.0.0'
+        default: 'v4.5.0'
 
 permissions:
   contents: write
@@ -44,9 +44,9 @@ jobs:
       id: get-tag
       run: |
         TAG="${{ github.event.inputs.tag }}"
-        DATE=$(TZ='Asia/Shanghai' date +'%Y%m%d')
-        echo "tag=${TAG}" >> $GITHUB_OUTPUT
-        echo "app_version=1.0.0-${DATE}" >> $GITHUB_OUTPUT
+        DATE=$(TZ='Asia/Shanghai' date +'%Y%m%d%H%M%S')
+        echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+        echo "app_version=2.0.0.0-${DATE}" >> "$GITHUB_OUTPUT"
 
     - name: Validate openppp2 tag
       run: |
@@ -90,7 +90,8 @@ jobs:
           -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
           -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
           -DCMAKE_EXE_LINKER_FLAGS="-L$RUNNER_TEMP/libunwind/lib" \
-          -DTHIRD_PARTY_LIBRARY_DIR="$TP"
+          -DTHIRD_PARTY_LIBRARY_DIR="$TP" \
+          -DENABLE_SYSNAT=${{ matrix.enable_sysnat }}
         make -j "$(nproc)"
 
     - name: Package openppp2
