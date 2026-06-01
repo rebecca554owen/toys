@@ -6,7 +6,7 @@ on:
       tag:
         description: 'Release tag，如 v1.0.0'
         required: true
-        default: 'v4.0.0'
+        default: 'v4.5.0'
 
 env:
   REGISTRY: ghcr.io
