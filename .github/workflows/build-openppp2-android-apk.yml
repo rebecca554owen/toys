@@ -20,20 +20,11 @@ env:
 
 jobs:
   build-so:
-    name: Android ${{ matrix.abi }}
+    name: Android arm64-v8a
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - abi: arm64-v8a
-            ppp_abi: aarch64
-          - abi: armeabi-v7a
-            ppp_abi: armv7a
-          - abi: x86
-            ppp_abi: x86
-          - abi: x86_64
-            ppp_abi: x64
+    env:
+      ANDROID_ABI: arm64-v8a
+      PPP_ANDROID_ABI: aarch64
 
     steps:
       - name: Checkout openppp2 repository
@@ -45,7 +36,7 @@ jobs:
 
       - name: Cache NDK and dependencies
         id: cache-ndk
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ runner.temp }}/ndk
           key: android-ndk-r20b-boost174-openssl111i
@@ -74,14 +65,14 @@ jobs:
         run: |
           NDK_ROOT="${{ runner.temp }}/ndk/abi"
           TP="${{ runner.temp }}/ndk"
-          export PPP_ANDROID_ABI=${{ matrix.ppp_abi }}
+          export PPP_ANDROID_ABI=${{ env.PPP_ANDROID_ABI }}
 
           cd openppp2/android && mkdir -p build && cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="${NDK_ROOT}/build/cmake/android.toolchain.cmake" \
             -DCMAKE_SYSTEM_NAME=Android \
-            -DANDROID_ABI=${{ matrix.abi }} \
+            -DANDROID_ABI=${{ env.ANDROID_ABI }} \
             -DANDROID_NATIVE_API_LEVEL=21 \
             -DANDROID_STL=c++_static \
             -DTHIRD_PARTY_LIBRARY_DIR="$TP"
@@ -89,14 +80,14 @@ jobs:
 
       - name: Package artifact
         run: |
-          ARTIFACT=openppp2-android-${{ matrix.abi }}.zip
+          ARTIFACT=openppp2-android-${{ env.ANDROID_ABI }}.zip
           echo "ARTIFACT=$ARTIFACT" >> $GITHUB_ENV
-          cd openppp2/bin/android/${{ matrix.abi }}
+          cd openppp2/bin/android/${{ env.ANDROID_ABI }}
           zip -r "$ARTIFACT" libopenppp2.so
           mv "$ARTIFACT" ../../
 
       - name: Upload Android library
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.ARTIFACT }}
           path: openppp2/bin/${{ env.ARTIFACT }}
@@ -115,7 +106,7 @@ jobs:
         id: get-tag
         run: |
           TAG="${{ github.event.inputs.tag }}"
-          DATE=$(TZ='Asia/Shanghai' date +'%Y%m%d')
+          DATE=$(TZ='Asia/Shanghai' date +'%Y%m%d%H%M%S')
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "app_version=1.0.0-${DATE}" >> $GITHUB_OUTPUT
 
@@ -141,11 +132,22 @@ jobs:
 
       - name: Extract .so into jniLibs
         run: |
-          for zip in so-artifacts/openppp2-android-*.zip/openppp2-android-*.zip; do
-            abi=$(basename "$zip" | sed 's/openppp2-android-//;s/\.zip//')
+          set -euo pipefail
+
+          mapfile -t zips < <(find so-artifacts -type f -name 'openppp2-android-*.zip' | sort)
+
+          if [ ${#zips[@]} -eq 0 ]; then
+            echo "::error::No openppp2-android-*.zip found under so-artifacts"
+            find so-artifacts -maxdepth 3 -type f -o -type d | sort
+            exit 1
+          fi
+
+          for zip in "${zips[@]}"; do
+            abi=$(basename "$zip" .zip | sed 's/^openppp2-android-//')
             mkdir -p "openppp2/android/android/app/src/main/jniLibs/${abi}"
             unzip -o "$zip" -d "openppp2/android/android/app/src/main/jniLibs/${abi}"
           done
+
           echo "=== jniLibs tree ==="
           find openppp2/android/android/app/src/main/jniLibs -type f
 
@@ -201,7 +203,7 @@ jobs:
           test -f "${{ env.APK_NAME }}"
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.APK_NAME }}
           path: ${{ env.APK_NAME }}
