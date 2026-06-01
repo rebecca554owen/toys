@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入 openppp2 的 tag 名称'
         required: true
-        default: 'v4.0.0'
+        default: 'v4.5.0'
 
 permissions:
   contents: write
@@ -17,16 +17,23 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ANDROID_API: "21"
+  BOOST_VERSION: "1.86.0"
+  OPENSSL_VERSION: "4.0.0"
 
 jobs:
   build-so:
-    name: Android arm64-v8a
+    name: Android arm64-v8a (ubuntu)
     runs-on: ubuntu-latest
     env:
       ANDROID_ABI: arm64-v8a
       PPP_ANDROID_ABI: aarch64
-
     steps:
+      - name: Checkout build recipes
+        uses: actions/checkout@v6
+        with:
+          path: toys
+
       - name: Checkout openppp2 repository
         uses: actions/checkout@v6
         with:
@@ -34,53 +41,438 @@ jobs:
           path: openppp2
           ref: inet6
 
-      - name: Cache NDK and dependencies
-        id: cache-ndk
+      - name: Cache Android NDK
+        id: cache-android-ndk
         uses: actions/cache@v5
         with:
-          path: ${{ runner.temp }}/ndk
-          key: android-ndk-r20b-boost174-openssl111i
+          path: ${{ runner.temp }}/android-ndk-r29
+          key: android-ndk-r29-linux
 
-      - name: Download NDK
-        if: steps.cache-ndk.outputs.cache-hit != 'true'
+      - name: Download Android NDK r29
+        if: steps.cache-android-ndk.outputs.cache-hit != 'true'
         run: |
-          mkdir -p "${{ runner.temp }}/ndk" && cd "${{ runner.temp }}/ndk"
-          wget -q https://dl.google.com/android/repository/android-ndk-r20b-linux-x86_64.zip
-          unzip -q android-ndk-r20b-linux-x86_64.zip && rm android-ndk-r20b-linux-x86_64.zip
-          mv android-ndk-r20b abi
+          set -euo pipefail
+          cd "${{ runner.temp }}"
+          curl -L --fail -o android-ndk-r29-linux.zip \
+            https://dl.google.com/android/repository/android-ndk-r29-linux.zip
+          unzip -q android-ndk-r29-linux.zip
+          rm android-ndk-r29-linux.zip
 
-      - name: Clone Boost for Android
-        if: steps.cache-ndk.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p "${{ runner.temp }}/ndk"
-          git clone --depth 1 https://github.com/liulilittle/boost-1.74-for-android-r20b-fpic.git "${{ runner.temp }}/ndk/boost"
+      - name: Cache Android third-party dependencies
+        id: cache-android-deps
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/openppp2/third-party
+          key: android-arm64-ndk29-boost-${{ env.BOOST_VERSION }}-fcontext-aapcs-openssl-${{ env.OPENSSL_VERSION }}
 
-      - name: Clone OpenSSL for Android
-        if: steps.cache-ndk.outputs.cache-hit != 'true'
+      - name: Prepare build variables
         run: |
-          mkdir -p "${{ runner.temp }}/ndk"
-          git clone --depth 1 https://github.com/liulilittle/openssl-1.1.1i-for-android-r20b.git "${{ runner.temp }}/ndk/openssl"
+          set -euo pipefail
+          NDK_ROOT="${{ runner.temp }}/android-ndk-r29"
+          TOOLCHAIN_DIR="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
+          TP="$GITHUB_WORKSPACE/openppp2/third-party"
+
+          test -f "$NDK_ROOT/build/cmake/android.toolchain.cmake"
+          test -x "$TOOLCHAIN_DIR/bin/aarch64-linux-android${ANDROID_API}-clang++"
+          mkdir -p "$TP"
+
+          {
+            echo "NDK_ROOT=$NDK_ROOT"
+            echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR"
+            echo "THIRD_PARTY_DIR=$TP"
+            echo "BOOST_SRC_DIR=$TP/boost-src"
+            echo "OPENSSL_SRC_DIR=$TP/openssl-src"
+            echo "OPENSSL_OUT_DIR=$TP/openssl-arm64"
+            echo "BOOST_OUT_DIR=$TP/boost/${ANDROID_ABI}"
+          } >> "$GITHUB_ENV"
+
+      - name: Build OpenSSL for Android arm64
+        if: steps.cache-android-deps.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          archive="$THIRD_PARTY_DIR/openssl-${OPENSSL_VERSION}.tar.gz"
+          extract="$THIRD_PARTY_DIR/openssl-${OPENSSL_VERSION}"
+
+          if [ ! -f "$OPENSSL_SRC_DIR/Configure" ]; then
+            curl -L --fail -o "$archive" \
+              "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
+            rm -rf "$extract" "$OPENSSL_SRC_DIR"
+            tar -xzf "$archive" -C "$THIRD_PARTY_DIR"
+            mv "$extract" "$OPENSSL_SRC_DIR"
+          fi
+
+          rm -rf "$OPENSSL_OUT_DIR"
+          mkdir -p "$OPENSSL_OUT_DIR"
+
+          cd "$OPENSSL_SRC_DIR"
+          export ANDROID_NDK_HOME="$NDK_ROOT"
+          export ANDROID_NDK_ROOT="$NDK_ROOT"
+          export PATH="$TOOLCHAIN_DIR/bin:$PATH"
+          export CFLAGS="-fPIC"
+          export CXXFLAGS="-fPIC"
+
+          make clean >/dev/null 2>&1 || true
+          ./Configure android-arm64 -D__ANDROID_API__="$ANDROID_API" \
+            --prefix="$OPENSSL_OUT_DIR" \
+            no-shared no-tests no-module no-asm
+          make -j"$(nproc)"
+          make install_sw
+
+      - name: Build Boost for Android arm64
+        if: steps.cache-android-deps.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          boost_lib_version="$(printf '%s' "$BOOST_VERSION" | sed 's/\./_/g')"
+          archive="$THIRD_PARTY_DIR/boost_${boost_lib_version}.tar.bz2"
+          extract="$THIRD_PARTY_DIR/boost_${boost_lib_version}"
+
+          if [ ! -f "$BOOST_SRC_DIR/boost/version.hpp" ] || \
+            ! grep -q "BOOST_LIB_VERSION \"$boost_lib_version\"" "$BOOST_SRC_DIR/boost/version.hpp"; then
+            curl -L --fail -o "$archive" \
+              "https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${boost_lib_version}.tar.bz2"
+            rm -rf "$extract" "$BOOST_SRC_DIR"
+            tar -xjf "$archive" -C "$THIRD_PARTY_DIR"
+            mv "$extract" "$BOOST_SRC_DIR"
+          fi
+
+          rm -rf "$BOOST_OUT_DIR"
+          mkdir -p "$BOOST_OUT_DIR"
+
+          user_config="$(mktemp)"
+          cat > "$user_config" <<EOF
+          using clang : androidarm64 : $TOOLCHAIN_DIR/bin/aarch64-linux-android${ANDROID_API}-clang++ :
+              <archiver>$TOOLCHAIN_DIR/bin/llvm-ar
+              <ranlib>$TOOLCHAIN_DIR/bin/llvm-ranlib
+              <compileflags>--target=aarch64-linux-android${ANDROID_API}
+              <compileflags>--sysroot=$TOOLCHAIN_DIR/sysroot
+              <compileflags>-fPIC
+              <compileflags>-std=c++17
+              <compileflags>-D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION
+              <linkflags>--target=aarch64-linux-android${ANDROID_API}
+              <linkflags>--sysroot=$TOOLCHAIN_DIR/sysroot
+          ;
+          EOF
+
+          cd "$BOOST_SRC_DIR"
+          if [ ! -x ./b2 ]; then
+            ./bootstrap.sh --with-toolset=clang
+          fi
+
+          ./b2 -j"$(nproc)" \
+            --user-config="$user_config" \
+            --build-dir="$BOOST_OUT_DIR/build" \
+            toolset=clang-androidarm64 \
+            target-os=android \
+            binary-format=elf \
+            architecture=arm \
+            address-model=64 \
+            abi=aapcs \
+            context-impl=fcontext \
+            link=static \
+            threading=multi \
+            runtime-link=static \
+            variant=release \
+            --with-system \
+            --with-coroutine \
+            --with-thread \
+            --with-context \
+            --with-regex \
+            --with-filesystem \
+            --stagedir="$BOOST_OUT_DIR/stage" \
+            stage
+
+          rm -f "$user_config"
+          find "$BOOST_OUT_DIR/stage/lib" -type f -name 'libboost_*.a' -exec cp {} "$BOOST_OUT_DIR/" \;
+
+          for lib in system coroutine thread context regex filesystem; do
+            test -f "$BOOST_OUT_DIR/libboost_${lib}.a"
+          done
+          nm_output="$("$TOOLCHAIN_DIR/bin/llvm-nm" -g "$BOOST_OUT_DIR/libboost_context.a")"
+          printf '%s\n' "$nm_output" | grep -Eq ' (make_fcontext)$'
+          printf '%s\n' "$nm_output" | grep -Eq ' (jump_fcontext)$'
+          printf '%s\n' "$nm_output" | grep -Eq ' (ontop_fcontext)$'
+
+      - name: Verify Android third-party dependencies
+        run: |
+          set -euo pipefail
+          test -f "$OPENSSL_OUT_DIR/lib/libssl.a"
+          test -f "$OPENSSL_OUT_DIR/lib/libcrypto.a"
+          test -d "$OPENSSL_OUT_DIR/include/openssl"
+          test -f "$BOOST_SRC_DIR/boost/version.hpp"
+          for lib in system coroutine thread context regex filesystem; do
+            test -f "$BOOST_OUT_DIR/libboost_${lib}.a"
+          done
+          nm_output="$("$TOOLCHAIN_DIR/bin/llvm-nm" -g "$BOOST_OUT_DIR/libboost_context.a")"
+          printf '%s\n' "$nm_output" | grep -Eq ' (make_fcontext)$'
+          printf '%s\n' "$nm_output" | grep -Eq ' (jump_fcontext)$'
+          printf '%s\n' "$nm_output" | grep -Eq ' (ontop_fcontext)$'
+
+      - name: Patch Android CMake for generated dependencies
+        run: |
+          set -euo pipefail
+          cp toys/openppp/android/CMakeLists.txt openppp2/android/CMakeLists.txt
+          grep -n "THIRD_PARTY_LIBRARY_DIR\|OPENPPP2_ANDROID_STATIC_LIBS\|CMAKE_CXX_STANDARD" \
+            openppp2/android/CMakeLists.txt
 
       - name: Build openppp2
         run: |
-          NDK_ROOT="${{ runner.temp }}/ndk/abi"
-          TP="${{ runner.temp }}/ndk"
-          export PPP_ANDROID_ABI=${{ env.PPP_ANDROID_ABI }}
+          set -euo pipefail
+          build_dir="openppp2/build/android-actions/${ANDROID_ABI}"
+          output_dir="$GITHUB_WORKSPACE/openppp2/bin/android/${ANDROID_ABI}"
+          rm -rf "$build_dir"
+          mkdir -p "$build_dir" "$output_dir"
 
-          cd openppp2/android && mkdir -p build && cd build
-          cmake .. \
+          cd "$build_dir"
+          cmake "$GITHUB_WORKSPACE/openppp2/android" \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DCMAKE_TOOLCHAIN_FILE="${NDK_ROOT}/build/cmake/android.toolchain.cmake" \
             -DCMAKE_SYSTEM_NAME=Android \
-            -DANDROID_ABI=${{ env.ANDROID_ABI }} \
-            -DANDROID_NATIVE_API_LEVEL=21 \
+            -DANDROID_ABI="${ANDROID_ABI}" \
+            -DANDROID_NATIVE_API_LEVEL="${ANDROID_API}" \
             -DANDROID_STL=c++_static \
-            -DTHIRD_PARTY_LIBRARY_DIR="$TP"
-          make -j$(nproc)
+            -DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$output_dir" \
+            -DTHIRD_PARTY_LIBRARY_DIR="$THIRD_PARTY_DIR" \
+            -DBOOST_ANDROID_INCLUDE_DIR="$BOOST_SRC_DIR" \
+            -DBOOST_ANDROID_LIB_DIR="$BOOST_OUT_DIR" \
+            -DOPENSSL_ANDROID_ROOT="$OPENSSL_OUT_DIR"
+          make -j"$(nproc)"
 
       - name: Package artifact
         run: |
-          ARTIFACT=openppp2-android-${{ env.ANDROID_ABI }}.zip
+          ARTIFACT=openppp2-android-${{ env.ANDROID_ABI }}-ubuntu.zip
+          echo "ARTIFACT=$ARTIFACT" >> $GITHUB_ENV
+          cd openppp2/bin/android/${{ env.ANDROID_ABI }}
+          zip -r "$ARTIFACT" libopenppp2.so
+          mv "$ARTIFACT" ../../
+
+      - name: Upload Android library
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: openppp2/bin/${{ env.ARTIFACT }}
+          if-no-files-found: error
+
+  build-so-macos:
+    name: Android arm64-v8a (macOS)
+    runs-on: macos-14
+    env:
+      ANDROID_ABI: arm64-v8a
+      PPP_ANDROID_ABI: aarch64
+
+    steps:
+      - name: Checkout build recipes
+        uses: actions/checkout@v6
+        with:
+          path: toys
+
+      - name: Checkout openppp2 repository
+        uses: actions/checkout@v6
+        with:
+          repository: rebecca554owen/openppp2
+          path: openppp2
+          ref: inet6
+
+      - name: Cache Android NDK
+        id: cache-android-ndk
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/android-ndk-r29
+          key: android-ndk-r29-darwin
+
+      - name: Download Android NDK r29
+        if: steps.cache-android-ndk.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          cd "${{ runner.temp }}"
+          curl -L --fail -o android-ndk-r29-darwin.zip \
+            https://dl.google.com/android/repository/android-ndk-r29-darwin.zip
+          unzip -q android-ndk-r29-darwin.zip
+          rm android-ndk-r29-darwin.zip
+
+      - name: Cache Android third-party dependencies
+        id: cache-android-deps
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/openppp2/third-party
+          key: android-arm64-ndk29-boost-${{ env.BOOST_VERSION }}-fcontext-aapcs-openssl-${{ env.OPENSSL_VERSION }}-macos
+
+      - name: Prepare build variables
+        run: |
+          set -euo pipefail
+          NDK_ROOT="${{ runner.temp }}/android-ndk-r29"
+          TOOLCHAIN_DIR="$NDK_ROOT/toolchains/llvm/prebuilt/darwin-x86_64"
+          TP="$GITHUB_WORKSPACE/openppp2/third-party"
+
+          test -f "$NDK_ROOT/build/cmake/android.toolchain.cmake"
+          test -x "$TOOLCHAIN_DIR/bin/aarch64-linux-android${ANDROID_API}-clang++"
+          mkdir -p "$TP"
+
+          {
+            echo "NDK_ROOT=$NDK_ROOT"
+            echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR"
+            echo "THIRD_PARTY_DIR=$TP"
+            echo "BOOST_SRC_DIR=$TP/boost-src"
+            echo "OPENSSL_SRC_DIR=$TP/openssl-src"
+            echo "OPENSSL_OUT_DIR=$TP/openssl-arm64"
+            echo "BOOST_OUT_DIR=$TP/boost/${ANDROID_ABI}"
+          } >> "$GITHUB_ENV"
+
+      - name: Build OpenSSL for Android arm64
+        if: steps.cache-android-deps.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          archive="$THIRD_PARTY_DIR/openssl-${OPENSSL_VERSION}.tar.gz"
+          extract="$THIRD_PARTY_DIR/openssl-${OPENSSL_VERSION}"
+
+          if [ ! -f "$OPENSSL_SRC_DIR/Configure" ]; then
+            curl -L --fail -o "$archive" \
+              "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
+            rm -rf "$extract" "$OPENSSL_SRC_DIR"
+            tar -xzf "$archive" -C "$THIRD_PARTY_DIR"
+            mv "$extract" "$OPENSSL_SRC_DIR"
+          fi
+
+          rm -rf "$OPENSSL_OUT_DIR"
+          mkdir -p "$OPENSSL_OUT_DIR"
+
+          cd "$OPENSSL_SRC_DIR"
+          export ANDROID_NDK_HOME="$NDK_ROOT"
+          export ANDROID_NDK_ROOT="$NDK_ROOT"
+          export PATH="$TOOLCHAIN_DIR/bin:$PATH"
+          export CFLAGS="-fPIC"
+          export CXXFLAGS="-fPIC"
+
+          make clean >/dev/null 2>&1 || true
+          ./Configure android-arm64 -D__ANDROID_API__="$ANDROID_API" \
+            --prefix="$OPENSSL_OUT_DIR" \
+            no-shared no-tests no-module no-asm
+          make -j"$(sysctl -n hw.logicalcpu)"
+          make install_sw
+
+      - name: Build Boost for Android arm64
+        if: steps.cache-android-deps.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          boost_lib_version="$(printf '%s' "$BOOST_VERSION" | sed 's/\./_/g')"
+          archive="$THIRD_PARTY_DIR/boost_${boost_lib_version}.tar.bz2"
+          extract="$THIRD_PARTY_DIR/boost_${boost_lib_version}"
+
+          if [ ! -f "$BOOST_SRC_DIR/boost/version.hpp" ] || \
+            ! grep -q "BOOST_LIB_VERSION \"$boost_lib_version\"" "$BOOST_SRC_DIR/boost/version.hpp"; then
+            curl -L --fail -o "$archive" \
+              "https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${boost_lib_version}.tar.bz2"
+            rm -rf "$extract" "$BOOST_SRC_DIR"
+            tar -xjf "$archive" -C "$THIRD_PARTY_DIR"
+            mv "$extract" "$BOOST_SRC_DIR"
+          fi
+
+          rm -rf "$BOOST_OUT_DIR"
+          mkdir -p "$BOOST_OUT_DIR"
+
+          user_config="$(mktemp)"
+          cat > "$user_config" <<EOF
+          using clang : androidarm64 : $TOOLCHAIN_DIR/bin/aarch64-linux-android${ANDROID_API}-clang++ :
+              <archiver>$TOOLCHAIN_DIR/bin/llvm-ar
+              <ranlib>$TOOLCHAIN_DIR/bin/llvm-ranlib
+              <compileflags>--target=aarch64-linux-android${ANDROID_API}
+              <compileflags>--sysroot=$TOOLCHAIN_DIR/sysroot
+              <compileflags>-fPIC
+              <compileflags>-std=c++17
+              <compileflags>-D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION
+              <linkflags>--target=aarch64-linux-android${ANDROID_API}
+              <linkflags>--sysroot=$TOOLCHAIN_DIR/sysroot
+          ;
+          EOF
+
+          cd "$BOOST_SRC_DIR"
+          if [ ! -x ./b2 ]; then
+            ./bootstrap.sh --with-toolset=clang
+          fi
+
+          ./b2 -j"$(sysctl -n hw.logicalcpu)" \
+            --user-config="$user_config" \
+            --build-dir="$BOOST_OUT_DIR/build" \
+            toolset=clang-androidarm64 \
+            target-os=android \
+            binary-format=elf \
+            architecture=arm \
+            address-model=64 \
+            abi=aapcs \
+            context-impl=fcontext \
+            link=static \
+            threading=multi \
+            runtime-link=static \
+            variant=release \
+            --with-system \
+            --with-coroutine \
+            --with-thread \
+            --with-context \
+            --with-regex \
+            --with-filesystem \
+            --stagedir="$BOOST_OUT_DIR/stage" \
+            stage
+
+          rm -f "$user_config"
+          find "$BOOST_OUT_DIR/stage/lib" -type f -name 'libboost_*.a' -exec cp {} "$BOOST_OUT_DIR/" \;
+
+          for lib in system coroutine thread context regex filesystem; do
+            test -f "$BOOST_OUT_DIR/libboost_${lib}.a"
+          done
+          nm_output="$("$TOOLCHAIN_DIR/bin/llvm-nm" -g "$BOOST_OUT_DIR/libboost_context.a")"
+          printf '%s\n' "$nm_output" | grep -Eq ' (make_fcontext)$'
+          printf '%s\n' "$nm_output" | grep -Eq ' (jump_fcontext)$'
+          printf '%s\n' "$nm_output" | grep -Eq ' (ontop_fcontext)$'
+
+      - name: Verify Android third-party dependencies
+        run: |
+          set -euo pipefail
+          test -f "$OPENSSL_OUT_DIR/lib/libssl.a"
+          test -f "$OPENSSL_OUT_DIR/lib/libcrypto.a"
+          test -d "$OPENSSL_OUT_DIR/include/openssl"
+          test -f "$BOOST_SRC_DIR/boost/version.hpp"
+          for lib in system coroutine thread context regex filesystem; do
+            test -f "$BOOST_OUT_DIR/libboost_${lib}.a"
+          done
+          nm_output="$("$TOOLCHAIN_DIR/bin/llvm-nm" -g "$BOOST_OUT_DIR/libboost_context.a")"
+          printf '%s\n' "$nm_output" | grep -Eq ' (make_fcontext)$'
+          printf '%s\n' "$nm_output" | grep -Eq ' (jump_fcontext)$'
+          printf '%s\n' "$nm_output" | grep -Eq ' (ontop_fcontext)$'
+
+      - name: Patch Android CMake for generated dependencies
+        run: |
+          set -euo pipefail
+          cp toys/openppp/android/CMakeLists.txt openppp2/android/CMakeLists.txt
+          grep -n "THIRD_PARTY_LIBRARY_DIR\|OPENPPP2_ANDROID_STATIC_LIBS\|CMAKE_CXX_STANDARD" \
+            openppp2/android/CMakeLists.txt
+
+      - name: Build openppp2
+        run: |
+          set -euo pipefail
+          build_dir="openppp2/build/android-actions/${ANDROID_ABI}"
+          output_dir="$GITHUB_WORKSPACE/openppp2/bin/android/${ANDROID_ABI}"
+          rm -rf "$build_dir"
+          mkdir -p "$build_dir" "$output_dir"
+
+          cd "$build_dir"
+          cmake "$GITHUB_WORKSPACE/openppp2/android" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_TOOLCHAIN_FILE="${NDK_ROOT}/build/cmake/android.toolchain.cmake" \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DANDROID_ABI="${ANDROID_ABI}" \
+            -DANDROID_NATIVE_API_LEVEL="${ANDROID_API}" \
+            -DANDROID_STL=c++_static \
+            -DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$output_dir" \
+            -DTHIRD_PARTY_LIBRARY_DIR="$THIRD_PARTY_DIR" \
+            -DBOOST_ANDROID_INCLUDE_DIR="$BOOST_SRC_DIR" \
+            -DBOOST_ANDROID_LIB_DIR="$BOOST_OUT_DIR" \
+            -DOPENSSL_ANDROID_ROOT="$OPENSSL_OUT_DIR"
+          make -j"$(sysctl -n hw.logicalcpu)"
+
+      - name: Package artifact
+        run: |
+          ARTIFACT=openppp2-android-${{ env.ANDROID_ABI }}-macos.zip
           echo "ARTIFACT=$ARTIFACT" >> $GITHUB_ENV
           cd openppp2/bin/android/${{ env.ANDROID_ABI }}
           zip -r "$ARTIFACT" libopenppp2.so
@@ -96,7 +488,7 @@ jobs:
   build-apk:
     name: Build Flutter APK
     runs-on: ubuntu-latest
-    needs: build-so
+    needs: [build-so, build-so-macos]
 
     env:
       APK_NAME: openppp2-android.apk
@@ -124,26 +516,26 @@ jobs:
           path: openppp2
           ref: inet6
 
-      - name: Download all .so artifacts
+      - name: Download ubuntu .so artifact
         uses: actions/download-artifact@v8
         with:
           path: so-artifacts
-          pattern: openppp2-android-*.zip
+          pattern: openppp2-android-*-ubuntu.zip
 
       - name: Extract .so into jniLibs
         run: |
           set -euo pipefail
 
-          mapfile -t zips < <(find so-artifacts -type f -name 'openppp2-android-*.zip' | sort)
+          mapfile -t zips < <(find so-artifacts -type f -name 'openppp2-android-*-ubuntu.zip' | sort)
 
           if [ ${#zips[@]} -eq 0 ]; then
-            echo "::error::No openppp2-android-*.zip found under so-artifacts"
+            echo "::error::No openppp2-android-*-ubuntu.zip found under so-artifacts"
             find so-artifacts -maxdepth 3 -type f -o -type d | sort
             exit 1
           fi
 
           for zip in "${zips[@]}"; do
-            abi=$(basename "$zip" .zip | sed 's/^openppp2-android-//')
+            abi=$(basename "$zip" .zip | sed 's/^openppp2-android-//;s/-ubuntu$//')
             mkdir -p "openppp2/android/android/app/src/main/jniLibs/${abi}"
             unzip -o "$zip" -d "openppp2/android/android/app/src/main/jniLibs/${abi}"
           done
@@ -152,7 +544,7 @@ jobs:
           find openppp2/android/android/app/src/main/jniLibs -type f
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -210,8 +602,9 @@ jobs:
           if-no-files-found: error
 
       - name: Record build time
+        id: record-build-time
         run: |
-          echo "BUILD_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+          echo "build_time=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: ncipollo/release-action@v1
@@ -225,4 +618,4 @@ jobs:
             Version: ${{ steps.get-tag.outputs.app_version }}
             Upstream Tag: ${{ steps.get-tag.outputs.tag }}
             Artifact Type: APK
-            Build Time: ${{ env.BUILD_TIME }}
+            Build Time: ${{ steps.record-build-time.outputs.build_time }}

@@ -1,0 +1,29 @@
+services:
+  ppp:
+    build:
+      context: .
+      dockerfile: ppp.Dockerfile
+    container_name: openppp
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./appsettings.json:/opt/appsettings.json:ro
+      - ppp-data:/opt/data
+    environment:
+      - ENABLE_IO=false
+      - ENABLE_SIMD=false
+      - ENABLE_TC=false
+      - ENABLE_BYPASS=true
+      - BYPASS_COUNTRY=CN
+      - BYPASS_IPLIST_PATH=/opt/data/ip.txt
+      - BYPASS_REFRESH=true
+      - BYPASS_PULL_ON_START=true
+    command: ["--config=/opt/appsettings.json"]
+
+volumes:
+  ppp-data:
