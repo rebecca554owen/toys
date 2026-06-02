@@ -16,7 +16,7 @@ PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
 
 # NDK 和第三方库路径
 NDK_ROOT="${NDK_ROOT:-$HOME/Library/Android/sdk/ndk/29.0.14206865}"
-THIRD_PARTY_DIR="${THIRD_PARTY_DIR:-$PROJECT_ROOT/third-party}"
+THIRD_PARTY_DIR="${THIRD_PARTY_DIR:-$HOME/Documents/GitHub/openppp2/third-party}"
 ANDROID_CMAKE="${ANDROID_CMAKE:-$HOME/Library/Android/sdk/cmake/3.22.1/bin/cmake}"
 ANDROID_API="${ANDROID_API:-21}"
 
@@ -356,8 +356,9 @@ build_abi() {
     cd "$build_dir"
 
     echo "运行 CMake..."
-    "$ANDROID_CMAKE" "$PROJECT_ROOT/android" \
+    "$ANDROID_CMAKE" "$HOME/Documents/GitHub/openppp2/android" \
         -DCMAKE_BUILD_TYPE=Release \
+        -G Ninja \
         -DCMAKE_TOOLCHAIN_FILE="$NDK_ROOT/build/cmake/android.toolchain.cmake" \
         -DCMAKE_SYSTEM_NAME=Android \
         -DANDROID_ABI="$ANDROID_ABI_NAME" \
@@ -370,7 +371,7 @@ build_abi() {
         -DOPENSSL_ANDROID_ROOT="$OPENSSL_OUT_DIR"
 
     echo "开始编译..."
-    make -j"$(cpu_count)"
+    ninja
 
     if [ -f "$output_dir/libopenppp2.so" ]; then
         echo ""
