@@ -18,7 +18,7 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   ANDROID_API: "21"
-  BOOST_VERSION: "1.86.0"
+  BOOST_VERSION: "1.87.0"
   OPENSSL_VERSION: "4.0.0"
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
     env:
       ANDROID_ABI: ${{ matrix.ANDROID_ABI }}
       ANDROID_API: "21"
-      BOOST_VERSION: "1.86.0"
+      BOOST_VERSION: "1.87.0"
       OPENSSL_VERSION: "4.0.0"
     steps:
       - name: Checkout build recipes
@@ -198,7 +198,6 @@ jobs:
               <compileflags>--sysroot=$TOOLCHAIN_DIR/sysroot
               <compileflags>-fPIC
               <compileflags>-std=c++17
-              <compileflags>-D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION
               <linkflags>--target=${CLANG_TRIPLE}${ANDROID_API}
               <linkflags>--sysroot=$TOOLCHAIN_DIR/sysroot
           ;
@@ -218,7 +217,6 @@ jobs:
             architecture=$BOOST_ARCHITECTURE \
             address-model=$BOOST_ADDRESS_MODEL \
             abi=$BOOST_ABI \
-            context-impl=fcontext \
             link=static \
             threading=multi \
             runtime-link=static \

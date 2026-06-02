@@ -31,7 +31,7 @@ Android 依赖不是仓库自带，全部需从源码下载并编译生成。And
 
 | 库 | 版本 | 目录 | 说明 |
 |---|---|---|---|
-| Boost | 1.86.0 | `third-party/boost/arm64-v8a/` | Android arm64 静态库（`.a`），从 archives.boost.io 下载源码编译 |
+| Boost | 1.87.0 | `third-party/boost/arm64-v8a/` | Android arm64 静态库（`.a`），从 archives.boost.io 下载源码编译 |
 | OpenSSL | 4.0.0 | `third-party/openssl-arm64/` | Android 构建专用，`no-shared no-tests no-module`，从 GitHub release 下载源码编译 |
 
 Android 构建实际链接的产物：
@@ -63,7 +63,7 @@ cd ~/Documents/GitHub/toys/openppp
 ```bash
 NDK_ROOT=~/Library/Android/sdk/ndk/29.0.14206865 \
 THIRD_PARTY_DIR=~/Documents/GitHub/openppp2/third-party \
-BOOST_VERSION=1.86.0 \
+BOOST_VERSION=1.87.0 \
 OPENSSL_VERSION=4.0.0 \
 ./build-android-local.sh arm64
 ```
@@ -102,7 +102,6 @@ cd ~/Documents/GitHub/toys/openppp
 产物路径：`~/Documents/GitHub/openppp2/android/build/libopenppp2.so`
 
 CMake 配置参数（关键）：
-- `-D_ANDROID_REDEF_STD_IN_OUT_ERR` 改为 `-D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION`
 - `-DTHIRD_PARTY_LIBRARY_DIR=~/Documents/GitHub/openppp2/third-party`
 - `-DBOOST_ANDROID_INCLUDE_DIR`、`-DBOOST_ANDROID_LIB_DIR`、`-DOPENSSL_ANDROID_ROOT` 指向生成的 Android 依赖
 
@@ -156,4 +155,3 @@ done
 - **OpenSSL 目录：** Android 使用 `third-party/openssl-arm64/`，不要覆盖 macOS 的 OpenSSL 目录。
 - **jemalloc：** Android 构建不需要（CMakeLists.txt 只在 Windows 分支检查 jemalloc）。
 - **NDK 版本：** CI 使用 r29（`android-ndk-r29-linux.zip`）；本地建议使用 29.0.14206865。
-- **C++ 标准：** Android CMake 使用 C++17，并为 Boost 1.86.0 添加 `_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION`。

@@ -20,7 +20,7 @@ THIRD_PARTY_DIR="${THIRD_PARTY_DIR:-$HOME/Documents/GitHub/openppp2/third-party}
 ANDROID_CMAKE="${ANDROID_CMAKE:-$HOME/Library/Android/sdk/cmake/3.22.1/bin/cmake}"
 ANDROID_API="${ANDROID_API:-21}"
 
-BOOST_VERSION="${BOOST_VERSION:-1.86.0}"
+BOOST_VERSION="${BOOST_VERSION:-1.87.0}"
 OPENSSL_VERSION="${OPENSSL_VERSION:-4.0.0}"
 BOOST_SRC_DIR="${BOOST_SRC_DIR:-$THIRD_PARTY_DIR/boost-src}"
 OPENSSL_SRC_DIR="${OPENSSL_SRC_DIR:-$THIRD_PARTY_DIR/openssl-src}"
@@ -56,7 +56,7 @@ print_help() {
     echo "    THIRD_PARTY_DIR  - 第三方库路径 (默认: ./third-party)"
     echo "    ANDROID_CMAKE    - Android SDK CMake 路径 (默认: ~/Library/Android/sdk/cmake/3.22.1/bin/cmake)"
     echo "    ANDROID_API      - Android API Level (默认: 21)"
-    echo "    BOOST_VERSION    - Boost 版本 (默认: 1.86.0)"
+    echo "    BOOST_VERSION    - Boost 版本 (默认: 1.87.0)"
     echo "    OPENSSL_VERSION  - OpenSSL 版本 (默认: 4.0.0)"
     echo ""
     echo "示例:"
@@ -255,7 +255,6 @@ write_boost_user_config() {
         printf '    <compileflags>--sysroot=%s/sysroot\n' "$TOOLCHAIN_DIR"
         printf '    <compileflags>-fPIC\n'
         printf '    <compileflags>-std=c++17\n'
-        printf '    <compileflags>-D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION\n'
         printf '    <linkflags>--target=%s%s\n' "$CLANG_TRIPLE" "$ANDROID_API"
         printf '    <linkflags>--sysroot=%s/sysroot\n' "$TOOLCHAIN_DIR"
         printf ';\n'
@@ -306,7 +305,6 @@ build_boost() {
             architecture="$BOOST_ARCHITECTURE" \
             address-model="$BOOST_ADDRESS_MODEL" \
             abi="$BOOST_ABI" \
-            context-impl=fcontext \
             link=static \
             threading=multi \
             runtime-link=static \

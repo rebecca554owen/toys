@@ -26,7 +26,7 @@
 
 | 库 | 版本 | 产物目录 | 说明 |
 |----|------|----------|------|
-| Boost | 1.86.0 | `third-party/boost/stage/lib/` | 静态库，需从源码编译 |
+| Boost | 1.87.0 | `third-party/boost/stage/lib/` | 静态库，需从源码编译 |
 | jemalloc | 5.3.0 | `third-party/jemalloc/lib/` | 静态库，需从源码编译 |
 | OpenSSL | 4.0.0 | `third-party/openssl/lib/` | 静态库，需从源码编译 |
 
@@ -40,14 +40,14 @@
 cd ~/Documents/GitHub/openppp2/third-party
 ```
 
-### 4.1 Boost 1.86.0
+### 4.1 Boost 1.87.0
 
 ```bash
 if [ -f boost/stage/lib/libboost_system.a ] && [ -f boost/stage/lib/libboost_context.a ]; then
   echo "跳过：boost 产物已存在"
 else
   # 下载并解压
-  curl -L -o boost.tar.bz2 "https://archives.boost.io/release/1.86.0/source/boost_1_86_0.tar.bz2"
+  curl -L -o boost.tar.bz2 "https://archives.boost.io/release/1.87.0/source/boost_1_87_0.tar.bz2"
   tar -xjf boost.tar.bz2
   rm -rf boost boost.tar.bz2
   mv boost_1_86_0 boost
