@@ -5,9 +5,9 @@
 SCRIPT_VERSION="1.3.0"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr-optimization.conf"
 FINAL_SYSCTL_CONF="/etc/sysctl.conf"
-UCP_REPO_URL="https://github.com/rebecca554owen/ucp.git"
-UCP_SRC_DIR="/usr/local/src/tcp_ucp"
-PATCHED_BBR_SRC_DIR="$UCP_SRC_DIR/google/patch"
+KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
+KCC_SRC_DIR="/usr/local/src/kcc"
+KCC_PATCH_DIR="$KCC_SRC_DIR/google/patch"
 FINAL_OVERRIDE_BEGIN="# BEGIN bbr.sh final override"
 FINAL_OVERRIDE_END="# END bbr.sh final override"
 
@@ -27,10 +27,10 @@ has_congestion_control() {
     echo " $(get_available_congestion_controls) " | grep -qw "$name"
 }
 
-get_ucp_module_status() {
-    if lsmod 2>/dev/null | grep -qw tcp_ucp; then
+get_kcc_module_status() {
+    if lsmod 2>/dev/null | grep -qw tcp_kcc; then
         echo "已加载"
-    elif command -v modinfo >/dev/null 2>&1 && modinfo tcp_ucp >/dev/null 2>&1; then
+    elif command -v modinfo >/dev/null 2>&1 && modinfo tcp_kcc >/dev/null 2>&1; then
         echo "已安装未加载"
     else
         echo "未安装"
@@ -97,10 +97,10 @@ get_system_info() {
         echo "补丁 BBR1 状态: 不可用 ($(get_patched_bbr_module_status))"
     fi
 
-    if has_congestion_control ucp; then
-        echo "UCP 状态: 可用 ($(get_ucp_module_status))"
+    if has_congestion_control kcc; then
+        echo "KCC 状态: 可用 ($(get_kcc_module_status))"
     else
-        echo "UCP 状态: 不可用 ($(get_ucp_module_status))"
+        echo "KCC 状态: 不可用 ($(get_kcc_module_status))"
     fi
     echo "====================="
 }
@@ -116,7 +116,7 @@ show_current_scheme() {
     echo "队列规则: $current_qdisc"
     echo "拥塞控制: $current_cc"
     echo "可用算法: $available_controls"
-    echo "UCP: $(get_ucp_module_status) | BBR1: $(get_patched_bbr_module_status) | BBR: $(get_bbr_module_status)"
+    echo "KCC: $(get_kcc_module_status) | BBR1: $(get_patched_bbr_module_status) | BBR: $(get_bbr_module_status)"
     echo "====================="
 }
 
@@ -186,7 +186,7 @@ install_kernel_update_for_headers() {
     fi
 }
 
-check_ucp_build_requirements() {
+check_kcc_build_requirements() {
     local missing=0
 
     for cmd in git make gcc; do
@@ -207,7 +207,7 @@ check_ucp_build_requirements() {
 ensure_build_environment() {
     local action_name=$1
 
-    if ! check_ucp_build_requirements; then
+    if ! check_kcc_build_requirements; then
         read -p "检测到构建依赖缺失，是否尝试自动安装？[Y/n]: " install_deps
         case $install_deps in
             ""|y|Y)
@@ -228,7 +228,7 @@ ensure_build_environment() {
         return 1
     fi
 
-    if ! check_ucp_build_requirements; then
+    if ! check_kcc_build_requirements; then
         echo "构建环境仍不完整，请确认 git、make、gcc 和当前内核 headers 已安装。"
         return 1
     fi
@@ -245,7 +245,7 @@ prompt_kernel_update_if_headers_missing() {
 
     echo "当前运行内核缺少构建目录: /lib/modules/$(uname -r)/build"
     echo "这通常表示当前内核对应 headers 已不在软件源中，或尚未安装。"
-    echo "可以安装软件源提供的最新内核和 headers，重启后再回来编译 UCP。"
+    echo "可以安装软件源提供的最新内核和 headers，重启后再回来编译 KCC。"
     read -p "是否安装/更新最新内核和 headers？[Y/n]: " update_kernel
     case $update_kernel in
         ""|y|Y)
@@ -261,7 +261,7 @@ prompt_kernel_update_if_headers_missing() {
                     systemctl reboot
                     ;;
                 *)
-                    echo "已取消立即重启。未重启前无法为当前运行内核编译 UCP。"
+                    echo "已取消立即重启。未重启前无法为当前运行内核编译 KCC。"
                     ;;
             esac
             return 1
@@ -273,24 +273,24 @@ prompt_kernel_update_if_headers_missing() {
     esac
 }
 
-prepare_ucp_source() {
-    mkdir -p "$(dirname "$UCP_SRC_DIR")" || return 1
+prepare_kcc_source() {
+    mkdir -p "$(dirname "$KCC_SRC_DIR")" || return 1
 
-    if [ -d "$UCP_SRC_DIR/.git" ]; then
-        echo "更新 UCP 源码: $UCP_SRC_DIR"
-        if git -C "$UCP_SRC_DIR" pull --ff-only; then
+    if [ -d "$KCC_SRC_DIR/.git" ]; then
+        echo "更新 KCC 源码: $KCC_SRC_DIR"
+        if git -C "$KCC_SRC_DIR" pull --ff-only; then
             return 0
         fi
 
         echo "常规 fast-forward 更新失败，尝试对齐远端分支。"
-        if [ -n "$(git -C "$UCP_SRC_DIR" status --porcelain --untracked-files=no)" ]; then
-            echo "UCP 源码目录存在本地改动，为避免覆盖，请先手动处理: $UCP_SRC_DIR"
+        if [ -n "$(git -C "$KCC_SRC_DIR" status --porcelain --untracked-files=no)" ]; then
+            echo "KCC 源码目录存在本地改动，为避免覆盖，请先手动处理: $KCC_SRC_DIR"
             return 1
         fi
 
         local current_branch upstream_ref
-        current_branch=$(git -C "$UCP_SRC_DIR" branch --show-current)
-        upstream_ref=$(git -C "$UCP_SRC_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)
+        current_branch=$(git -C "$KCC_SRC_DIR" branch --show-current)
+        upstream_ref=$(git -C "$KCC_SRC_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)
         if [ -z "$upstream_ref" ] && [ -n "$current_branch" ]; then
             upstream_ref="origin/$current_branch"
         fi
@@ -298,16 +298,16 @@ prepare_ucp_source() {
             upstream_ref="origin/main"
         fi
 
-        git -C "$UCP_SRC_DIR" fetch --prune origin || return 1
-        if ! git -C "$UCP_SRC_DIR" rev-parse --verify "$upstream_ref" >/dev/null 2>&1; then
+        git -C "$KCC_SRC_DIR" fetch --prune origin || return 1
+        if ! git -C "$KCC_SRC_DIR" rev-parse --verify "$upstream_ref" >/dev/null 2>&1; then
             echo "无法找到远端分支: $upstream_ref"
             return 1
         fi
-        git -C "$UCP_SRC_DIR" reset --hard "$upstream_ref"
+        git -C "$KCC_SRC_DIR" reset --hard "$upstream_ref"
     else
-        echo "克隆 UCP 源码到: $UCP_SRC_DIR"
-        rm -rf "$UCP_SRC_DIR"
-        git clone "$UCP_REPO_URL" "$UCP_SRC_DIR"
+        echo "克隆 KCC 源码到: $KCC_SRC_DIR"
+        rm -rf "$KCC_SRC_DIR"
+        git clone "$KCC_REPO_URL" "$KCC_SRC_DIR"
     fi
 }
 
@@ -328,8 +328,8 @@ install_module_file() {
     depmod "$(uname -r)" || return 1
 }
 
-install_ucp_module_file() {
-    install_module_file "$UCP_SRC_DIR/tcp_ucp.ko" "tcp_ucp" "UCP"
+install_kcc_module_file() {
+    install_module_file "$KCC_SRC_DIR/tcp_kcc.ko" "tcp_kcc" "KCC"
 }
 
 build_kernel_module() {
@@ -358,7 +358,7 @@ reload_congestion_module() {
 }
 
 install_bbr_module_file() {
-    install_module_file "$PATCHED_BBR_SRC_DIR/tcp_bbr1.ko" "tcp_bbr1" "补丁 BBR"
+    install_module_file "$KCC_PATCH_DIR/tcp_bbr1.ko" "tcp_bbr1" "补丁 BBR"
 }
 
 install_bbr_module() {
@@ -368,14 +368,14 @@ install_bbr_module() {
     echo "====== 编译/安装/更新补丁 BBR 模块 ======"
     ensure_build_environment "补丁 BBR 安装" || return 1
 
-    prepare_ucp_source || return 1
-    if [ ! -d "$PATCHED_BBR_SRC_DIR" ] || [ ! -f "$PATCHED_BBR_SRC_DIR/tcp_bbr1.c" ]; then
-        echo "未找到补丁 BBR 源码目录: $PATCHED_BBR_SRC_DIR"
+    prepare_kcc_source || return 1
+    if [ ! -d "$KCC_PATCH_DIR" ] || [ ! -f "$KCC_PATCH_DIR/tcp_bbr1.c" ]; then
+        echo "未找到补丁 BBR 源码目录: $KCC_PATCH_DIR"
         return 1
     fi
 
     echo "开始编译补丁 BBR..."
-    build_kernel_module "$PATCHED_BBR_SRC_DIR" || return 1
+    build_kernel_module "$KCC_PATCH_DIR" || return 1
 
     install_bbr_module_file || return 1
 
@@ -396,35 +396,35 @@ install_bbr_module() {
     return 1
 }
 
-install_ucp_module() {
+install_kcc_module() {
     require_linux || return 1
     require_root || return 1
 
-    echo "====== 编译/安装/更新 UCP 模块 ======"
-    ensure_build_environment "UCP 安装" || return 1
+    echo "====== 编译/安装/更新 KCC 模块 ======"
+    ensure_build_environment "KCC 安装" || return 1
 
-    prepare_ucp_source || return 1
+    prepare_kcc_source || return 1
 
-    echo "开始编译 UCP..."
-    build_kernel_module "$UCP_SRC_DIR" || return 1
+    echo "开始编译 KCC..."
+    build_kernel_module "$KCC_SRC_DIR" || return 1
 
-    echo "安装 UCP 模块..."
-    install_ucp_module_file || return 1
+    echo "安装 KCC 模块..."
+    install_kcc_module_file || return 1
 
-    echo "加载 tcp_ucp 模块..."
-    if ! reload_congestion_module tcp_ucp ucp; then
-        echo "UCP 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名内核模块加载。"
+    echo "加载 tcp_kcc 模块..."
+    if ! reload_congestion_module tcp_kcc kcc; then
+        echo "KCC 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名内核模块加载。"
         return 1
     fi
 
-    if has_congestion_control ucp; then
-        echo "UCP 安装并加载成功。"
+    if has_congestion_control kcc; then
+        echo "KCC 安装并加载成功。"
         echo
         get_system_info
         return 0
     fi
 
-    echo "UCP 模块已尝试加载，但系统可用拥塞控制列表中未发现 ucp。"
+    echo "KCC 模块已尝试加载，但系统可用拥塞控制列表中未发现 kcc。"
     return 1
 }
 
@@ -442,27 +442,27 @@ ensure_congestion_control_available() {
         bbr1)
             modprobe tcp_bbr1 2>/dev/null || true
             ;;
-        ucp)
-            modprobe tcp_ucp 2>/dev/null || true
+        kcc)
+            modprobe tcp_kcc 2>/dev/null || true
             ;;
     esac
 
     has_congestion_control "$name"
 }
 
-ensure_ucp_ready() {
-    if ensure_congestion_control_available ucp; then
+ensure_kcc_ready() {
+    if ensure_congestion_control_available kcc; then
         return 0
     fi
 
-    echo "UCP 未安装或未加载，无法直接应用 ucp + fq。"
-    read -p "是否立即编译/安装/加载 UCP 模块？[Y/n]: " install_now
+    echo "KCC 未安装或未加载，无法直接应用 kcc + fq。"
+    read -p "是否立即编译/安装/加载 KCC 模块？[Y/n]: " install_now
     case $install_now in
         ""|y|Y)
-            install_ucp_module
+            install_kcc_module
             ;;
         *)
-            echo "已取消应用 UCP。"
+            echo "已取消应用 KCC。"
             return 1
             ;;
     esac
@@ -474,7 +474,7 @@ ensure_bbr_ready() {
     fi
 
     echo "BBR1 未安装或未加载，无法直接应用 bbr1。"
-    echo "将使用 UCP 仓库 google/patch 目录中的补丁 BBR1 模块。"
+    echo "将使用 KCC 仓库 google/patch 目录中的补丁 BBR1 模块。"
     read -p "是否立即编译/安装/加载 BBR1 模块？[Y/n]: " install_now
     case $install_now in
         ""|y|Y)
@@ -494,11 +494,11 @@ apply_optimization_menu() {
     echo "====== 应用优化方案 ======"
     echo
     echo "推荐:"
-    echo "1. ucp + fq (默认)"
+    echo "1. kcc + fq (默认)"
     echo
-    echo "UCP:"
-    echo "2. ucp + cake"
-    echo "3. ucp + fq_pie"
+    echo "KCC:"
+    echo "2. kcc + cake"
+    echo "3. kcc + fq_pie"
     echo
     echo "优化版 BBR:"
     echo "4. bbr1 + fq"
@@ -515,13 +515,13 @@ apply_optimization_menu() {
 
     case $choice in
         1|"")
-            apply_optimization "fq" "ucp"
+            apply_optimization "fq" "kcc"
             ;;
         2)
-            apply_optimization "cake" "ucp"
+            apply_optimization "cake" "kcc"
             ;;
         3)
-            apply_optimization "fq_pie" "ucp"
+            apply_optimization "fq_pie" "kcc"
             ;;
         4)
             apply_optimization "fq" "bbr1"
@@ -545,8 +545,8 @@ apply_optimization_menu() {
             return 0
             ;;
         *)
-            echo "无效选择，使用默认值 ucp + fq"
-            apply_optimization "fq" "ucp"
+            echo "无效选择，使用默认值 kcc + fq"
+            apply_optimization "fq" "kcc"
             ;;
     esac
 }
@@ -561,8 +561,8 @@ apply_optimization() {
     qdisc=$selected_qdisc
     congestion_control=$selected_congestion_control
 
-    if [ "$congestion_control" = "ucp" ]; then
-        ensure_ucp_ready || return 1
+    if [ "$congestion_control" = "kcc" ]; then
+        ensure_kcc_ready || return 1
     elif [ "$congestion_control" = "bbr1" ]; then
         ensure_bbr_ready || return 1
     elif ! ensure_congestion_control_available "$congestion_control"; then
@@ -702,7 +702,7 @@ net.ipv6.neigh.default.gc_thresh3 = 8192
 fs.file-max = 1024000
 fs.inotify.max_user_instances = 65536
 
-# BBR/UCP 配置
+# BBR/KCC 配置
 net.core.default_qdisc = $qdisc
 net.ipv4.tcp_congestion_control = $congestion_control
 EOF
@@ -729,7 +729,7 @@ menu() {
         show_current_scheme
         echo
         echo "====== 系统优化菜单 ======"
-        echo "1. 安装/更新 UCP 模块"
+        echo "1. 安装/更新 KCC 模块"
         echo "2. 安装/更新 BBR1 模块"
         echo "3. 应用优化"
         echo "4. 恢复默认 BBR (bbr + fq)"
@@ -739,7 +739,7 @@ menu() {
 
         case $option in
             1)
-                install_ucp_module
+                install_kcc_module
                 ;;
             2)
                 install_bbr_module
