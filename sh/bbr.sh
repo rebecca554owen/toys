@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.3.0"
+SCRIPT_VERSION="1.3.1"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
 KCC_SRC_DIR="/usr/local/src/kcc"
@@ -115,7 +115,7 @@ show_current_scheme() {
     current_cc=$(get_sysctl_value net.ipv4.tcp_congestion_control)
     available_controls=$(get_available_congestion_controls)
 
-    echo "====== 当前方案 ======"
+    echo "====== 当前方案 v$SCRIPT_VERSION ======"
     echo "队列规则: $current_qdisc"
     echo "拥塞控制: $current_cc"
     echo "可用算法: $available_controls"
@@ -797,18 +797,6 @@ apply_kcc_tuning() {
     show_kcc_tuning_status
 }
 
-custom_kcc_low_gain() {
-    local low_num low_den high_num high_den
-
-    high_num=$(get_kcc_effective_value kcc_inflight_high_gain_num "$KCC_HIGH_GAIN_NUM")
-    high_den=$(get_kcc_effective_value kcc_inflight_high_gain_den "$KCC_HIGH_GAIN_DEN")
-
-    read -p "请输入 low_gain 分子，例如 100/125/150: " low_num
-    read -p "请输入 low_gain 分母，例如 100: " low_den
-
-    apply_kcc_tuning "$low_num" "$low_den" "$high_num" "$high_den"
-}
-
 kcc_tuning_menu() {
     local choice
 
@@ -824,11 +812,8 @@ kcc_tuning_menu() {
         echo
         echo "1. 官方通用稳态：low_gain = 1.0x，降低 RETR"
         echo "2. 激进竞争模式：low_gain = 1.25x，抢占带宽"
-        echo "3. 查看当前 KCC 参数"
-        echo "4. 自定义 low_gain"
-        echo "5. 恢复官方推荐参数"
         echo "0. 返回主菜单"
-        read -p "请输入选择 [0-5]: " choice
+        read -p "请输入选择 [0-2]: " choice
 
         case $choice in
             1)
@@ -836,15 +821,6 @@ kcc_tuning_menu() {
                 ;;
             2)
                 apply_kcc_tuning "$KCC_AGGRESSIVE_LOW_GAIN_NUM" "$KCC_AGGRESSIVE_LOW_GAIN_DEN" "$KCC_HIGH_GAIN_NUM" "$KCC_HIGH_GAIN_DEN"
-                ;;
-            3)
-                show_kcc_tuning_status
-                ;;
-            4)
-                custom_kcc_low_gain
-                ;;
-            5)
-                apply_kcc_tuning "$KCC_OFFICIAL_LOW_GAIN_NUM" "$KCC_OFFICIAL_LOW_GAIN_DEN" "$KCC_HIGH_GAIN_NUM" "$KCC_HIGH_GAIN_DEN"
                 ;;
             0)
                 return 0
@@ -990,8 +966,8 @@ EOF
         return 1
     }
     echo "配置已写入 $SYSCTL_CONF"
-    if ! sysctl --system; then
-        echo "警告：sysctl --system 执行失败，请检查上方错误。"
+    if ! sysctl -p "$SYSCTL_CONF"; then
+        echo "警告：加载 $SYSCTL_CONF 失败，请检查上方错误。"
         return 1
     fi
     if ! sysctl -w "net.core.default_qdisc=$qdisc" "net.ipv4.tcp_congestion_control=$congestion_control"; then
@@ -1013,7 +989,7 @@ menu() {
     while true; do
         show_current_scheme
         echo
-        echo "====== 系统优化菜单 ======"
+        echo "====== 系统优化菜单 v$SCRIPT_VERSION ======"
         echo "1. 安装/更新 KCC 模块"
         echo "2. 安装/更新 BBR1 模块"
         echo "3. 应用优化方案"
