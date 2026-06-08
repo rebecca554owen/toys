@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.3.1"
+SCRIPT_VERSION="1.3.2"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
 KCC_SRC_DIR="/usr/local/src/kcc"
@@ -966,7 +966,7 @@ EOF
         return 1
     }
     echo "配置已写入 $SYSCTL_CONF"
-    if ! sysctl -p "$SYSCTL_CONF"; then
+    if ! sysctl -e -p "$SYSCTL_CONF"; then
         echo "警告：加载 $SYSCTL_CONF 失败，请检查上方错误。"
         return 1
     fi
