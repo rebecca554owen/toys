@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.3.4"
+SCRIPT_VERSION="1.3.5"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
 KCC_SRC_DIR="/usr/local/src/kcc"
@@ -116,6 +116,7 @@ show_current_scheme() {
     available_controls=$(get_available_congestion_controls)
 
     echo "====== 当前方案 v$SCRIPT_VERSION ======"
+    echo "内核版本: $(uname -r)"
     echo "队列规则: $current_qdisc"
     echo "拥塞控制: $current_cc"
     echo "可用算法: $available_controls"
@@ -500,20 +501,20 @@ apply_optimization_menu() {
     echo "====== 应用优化方案 ======"
     echo
     echo "推荐:"
-    echo "1. kcc + fq (默认)"
+    echo "1. kcc + cake (默认)"
     echo
     echo "KCC:"
-    echo "2. kcc + cake"
+    echo "2. kcc + fq"
     echo "3. kcc + fq_pie"
     echo
     echo "优化版 BBR:"
-    echo "4. bbr1 + fq"
-    echo "5. bbr1 + cake"
+    echo "4. bbr1 + cake"
+    echo "5. bbr1 + fq"
     echo "6. bbr1 + fq_pie"
     echo
     echo "系统默认 BBR:"
-    echo "7. bbr + fq"
-    echo "8. bbr + cake"
+    echo "7. bbr + cake"
+    echo "8. bbr + fq"
     echo "9. bbr + fq_pie"
     echo
     echo "0. 返回主菜单"
@@ -521,28 +522,28 @@ apply_optimization_menu() {
 
     case $choice in
         1|"")
-            apply_optimization "fq" "kcc"
+            apply_optimization "cake" "kcc"
             ;;
         2)
-            apply_optimization "cake" "kcc"
+            apply_optimization "fq" "kcc"
             ;;
         3)
             apply_optimization "fq_pie" "kcc"
             ;;
         4)
-            apply_optimization "fq" "bbr1"
+            apply_optimization "cake" "bbr1"
             ;;
         5)
-            apply_optimization "cake" "bbr1"
+            apply_optimization "fq" "bbr1"
             ;;
         6)
             apply_optimization "fq_pie" "bbr1"
             ;;
         7)
-            apply_optimization "fq" "bbr"
+            apply_optimization "cake" "bbr"
             ;;
         8)
-            apply_optimization "cake" "bbr"
+            apply_optimization "fq" "bbr"
             ;;
         9)
             apply_optimization "fq_pie" "bbr"
@@ -551,8 +552,8 @@ apply_optimization_menu() {
             return 0
             ;;
         *)
-            echo "无效选择，使用默认值 kcc + fq"
-            apply_optimization "fq" "kcc"
+            echo "无效选择，使用默认值 kcc + cake"
+            apply_optimization "cake" "kcc"
             ;;
     esac
 }
