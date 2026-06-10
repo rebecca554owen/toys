@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.3.2"
+SCRIPT_VERSION="1.3.3"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
 KCC_SRC_DIR="/usr/local/src/kcc"
@@ -281,15 +281,6 @@ prepare_kcc_source() {
 
     if [ -d "$KCC_SRC_DIR/.git" ]; then
         echo "更新 KCC 源码: $KCC_SRC_DIR"
-        if git -C "$KCC_SRC_DIR" pull --ff-only; then
-            return 0
-        fi
-
-        echo "常规 fast-forward 更新失败，尝试对齐远端分支。"
-        if [ -n "$(git -C "$KCC_SRC_DIR" status --porcelain --untracked-files=no)" ]; then
-            echo "KCC 源码目录存在本地改动，为避免覆盖，请先手动处理: $KCC_SRC_DIR"
-            return 1
-        fi
 
         local current_branch upstream_ref
         current_branch=$(git -C "$KCC_SRC_DIR" branch --show-current)
@@ -306,7 +297,9 @@ prepare_kcc_source() {
             echo "无法找到远端分支: $upstream_ref"
             return 1
         fi
-        git -C "$KCC_SRC_DIR" reset --hard "$upstream_ref"
+        echo "丢弃本地改动并对齐远端分支: $upstream_ref"
+        git -C "$KCC_SRC_DIR" reset --hard "$upstream_ref" || return 1
+        git -C "$KCC_SRC_DIR" clean -fdx || return 1
     else
         echo "克隆 KCC 源码到: $KCC_SRC_DIR"
         rm -rf "$KCC_SRC_DIR"
