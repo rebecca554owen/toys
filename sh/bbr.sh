@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.3.5"
+SCRIPT_VERSION="1.3.6"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
 KCC_SRC_DIR="/usr/local/src/kcc"
@@ -16,6 +16,7 @@ KCC_AGGRESSIVE_LOW_GAIN_NUM=125
 KCC_AGGRESSIVE_LOW_GAIN_DEN=100
 KCC_HIGH_GAIN_NUM=200
 KCC_HIGH_GAIN_DEN=100
+KCC_KF_STEADY_MODE=0
 
 get_sysctl_value() {
     sysctl -n "$1" 2>/dev/null || echo "未知"
@@ -673,21 +674,23 @@ show_kcc_gain_line() {
     local label=$1
     local name_num=$2
     local name_den=$3
-    local runtime_num runtime_den persistent_num persistent_den
+    local default_num=$4
+    local default_den=$5
+    local eff_num eff_den
 
-    runtime_num=$(get_kcc_runtime_value "$name_num")
-    runtime_den=$(get_kcc_runtime_value "$name_den")
-    persistent_num=$(get_kcc_persistent_value "$name_num")
-    persistent_den=$(get_kcc_persistent_value "$name_den")
+    eff_num=$(get_kcc_effective_value "$name_num" "$default_num")
+    eff_den=$(get_kcc_effective_value "$name_den" "$default_den")
 
-    echo "$label 运行时: $runtime_num/$runtime_den = $(format_kcc_gain "$runtime_num" "$runtime_den")"
-    echo "$label 持久化: $persistent_num/$persistent_den = $(format_kcc_gain "$persistent_num" "$persistent_den")"
+    echo "$label $eff_num/$eff_den = $(format_kcc_gain "$eff_num" "$eff_den")"
 }
 
 show_kcc_tuning_status() {
     echo "====== KCC 参数 ======"
-    show_kcc_gain_line "low_gain " kcc_inflight_low_gain_num kcc_inflight_low_gain_den
-    show_kcc_gain_line "high_gain" kcc_inflight_high_gain_num kcc_inflight_high_gain_den
+    show_kcc_gain_line "low_gain " kcc_inflight_low_gain_num kcc_inflight_low_gain_den "$KCC_OFFICIAL_LOW_GAIN_NUM" "$KCC_OFFICIAL_LOW_GAIN_DEN"
+    show_kcc_gain_line "high_gain" kcc_inflight_high_gain_num kcc_inflight_high_gain_den "$KCC_HIGH_GAIN_NUM" "$KCC_HIGH_GAIN_DEN"
+    local kfsm
+    kfsm=$(get_kcc_effective_value kcc_kf_steady_mode "$KCC_KF_STEADY_MODE")
+    echo "kf_steady_mode $kfsm"
     echo "====================="
 }
 
@@ -734,11 +737,13 @@ persist_kcc_tuning() {
     local low_den=$2
     local high_num=$3
     local high_den=$4
+    local kf_steady=$5
 
     write_sysctl_conf_value net.kcc.kcc_inflight_low_gain_num "$low_num" || return 1
     write_sysctl_conf_value net.kcc.kcc_inflight_low_gain_den "$low_den" || return 1
     write_sysctl_conf_value net.kcc.kcc_inflight_high_gain_num "$high_num" || return 1
     write_sysctl_conf_value net.kcc.kcc_inflight_high_gain_den "$high_den" || return 1
+    write_sysctl_conf_value net.kcc.kcc_kf_steady_mode "$kf_steady" || return 1
 }
 
 apply_kcc_tuning_runtime() {
@@ -746,6 +751,7 @@ apply_kcc_tuning_runtime() {
     local low_den=$2
     local high_num=$3
     local high_den=$4
+    local kf_steady=$5
 
     if ! ensure_congestion_control_available kcc; then
         echo "KCC 未安装或未加载，当前只完成持久化配置。"
@@ -769,7 +775,8 @@ apply_kcc_tuning_runtime() {
         "net.kcc.kcc_inflight_low_gain_num=$low_num" \
         "net.kcc.kcc_inflight_low_gain_den=$low_den" \
         "net.kcc.kcc_inflight_high_gain_num=$high_num" \
-        "net.kcc.kcc_inflight_high_gain_den=$high_den"; then
+        "net.kcc.kcc_inflight_high_gain_den=$high_den" \
+        "net.kcc.kcc_kf_steady_mode=$kf_steady"; then
         echo "KCC 运行时参数已生效。"
     else
         echo "KCC 运行时参数写入失败；持久化配置已保留，重启或加载 KCC 后再检查。"
@@ -781,6 +788,7 @@ apply_kcc_tuning() {
     local low_den=$2
     local high_num=$3
     local high_den=$4
+    local kf_steady=$5
 
     require_linux || return 1
     require_root || return 1
@@ -791,40 +799,58 @@ apply_kcc_tuning() {
         return 1
     fi
 
-    persist_kcc_tuning "$low_num" "$low_den" "$high_num" "$high_den" || {
+    persist_kcc_tuning "$low_num" "$low_den" "$high_num" "$high_den" "$kf_steady" || {
         echo "写入 $SYSCTL_CONF 持久配置失败"
         return 1
     }
     echo "KCC 参数已持久化到 $SYSCTL_CONF"
 
-    apply_kcc_tuning_runtime "$low_num" "$low_den" "$high_num" "$high_den"
+    apply_kcc_tuning_runtime "$low_num" "$low_den" "$high_num" "$high_den" "$kf_steady"
     show_kcc_tuning_status
 }
 
 kcc_tuning_menu() {
-    local choice
+    local choice kf_current kf_label kf_new
 
     while true; do
+        kf_current=$(get_kcc_effective_value kcc_kf_steady_mode "$KCC_KF_STEADY_MODE")
+        if [ "$kf_current" = "1" ]; then
+            kf_label="启用 → 切换 禁用"
+            kf_new=0
+        else
+            kf_label="禁用 → 切换 启用"
+            kf_new=1
+        fi
+
         echo "====== KCC 参数调优 ======"
         echo
         echo "说明:"
-        echo "  low_gain 控制 KCC 稳态 inflight 下限。"
+        echo "  low_gain        控制 KCC 稳态 inflight 下限。"
         echo "  1.0x 更稳，RETR 更低，适合作为通用默认。"
         echo "  1.25x 更激进，可在 BBR/CUBIC 竞争中抢占更多带宽。"
+        echo "  kf_steady_mode  新连接用全局 Kalman 历史峰值估算初始带宽。"
         echo
         show_kcc_tuning_status
         echo
         echo "1. 官方通用稳态：low_gain = 1.0x，降低 RETR"
         echo "2. 激进竞争模式：low_gain = 1.25x，抢占带宽"
+        echo "3. KF 稳态峰值模式：当前 $kf_label"
         echo "0. 返回主菜单"
-        read -p "请输入选择 [0-2]: " choice
+        read -p "请输入选择 [0-3]: " choice
 
         case $choice in
             1)
-                apply_kcc_tuning "$KCC_OFFICIAL_LOW_GAIN_NUM" "$KCC_OFFICIAL_LOW_GAIN_DEN" "$KCC_HIGH_GAIN_NUM" "$KCC_HIGH_GAIN_DEN"
+                apply_kcc_tuning "$KCC_OFFICIAL_LOW_GAIN_NUM" "$KCC_OFFICIAL_LOW_GAIN_DEN" "$KCC_HIGH_GAIN_NUM" "$KCC_HIGH_GAIN_DEN" "$kf_current"
                 ;;
             2)
-                apply_kcc_tuning "$KCC_AGGRESSIVE_LOW_GAIN_NUM" "$KCC_AGGRESSIVE_LOW_GAIN_DEN" "$KCC_HIGH_GAIN_NUM" "$KCC_HIGH_GAIN_DEN"
+                apply_kcc_tuning "$KCC_AGGRESSIVE_LOW_GAIN_NUM" "$KCC_AGGRESSIVE_LOW_GAIN_DEN" "$KCC_HIGH_GAIN_NUM" "$KCC_HIGH_GAIN_DEN" "$kf_current"
+                ;;
+            3)
+                apply_kcc_tuning "$(get_kcc_effective_value kcc_inflight_low_gain_num "$KCC_OFFICIAL_LOW_GAIN_NUM")" \
+                    "$(get_kcc_effective_value kcc_inflight_low_gain_den "$KCC_OFFICIAL_LOW_GAIN_DEN")" \
+                    "$(get_kcc_effective_value kcc_inflight_high_gain_num "$KCC_HIGH_GAIN_NUM")" \
+                    "$(get_kcc_effective_value kcc_inflight_high_gain_den "$KCC_HIGH_GAIN_DEN")" \
+                    "$kf_new"
                 ;;
             0)
                 return 0
@@ -842,6 +868,7 @@ append_kcc_tuning_to_sysctl_conf() {
     local low_den=$2
     local high_num=$3
     local high_den=$4
+    local kf_steady=$5
 
     [ "$congestion_control" = "kcc" ] || return 0
 
@@ -850,17 +877,19 @@ net.kcc.kcc_inflight_low_gain_num = $low_num
 net.kcc.kcc_inflight_low_gain_den = $low_den
 net.kcc.kcc_inflight_high_gain_num = $high_num
 net.kcc.kcc_inflight_high_gain_den = $high_den
+net.kcc.kcc_kf_steady_mode = $kf_steady
 EOF
 }
 
 # 生成sysctl配置并应用
 generate_sysctl_conf() {
-    local kcc_low_num kcc_low_den kcc_high_num kcc_high_den
+    local kcc_low_num kcc_low_den kcc_high_num kcc_high_den kcc_kf_steady
 
     kcc_low_num=$(get_kcc_effective_value kcc_inflight_low_gain_num "$KCC_OFFICIAL_LOW_GAIN_NUM")
     kcc_low_den=$(get_kcc_effective_value kcc_inflight_low_gain_den "$KCC_OFFICIAL_LOW_GAIN_DEN")
     kcc_high_num=$(get_kcc_effective_value kcc_inflight_high_gain_num "$KCC_HIGH_GAIN_NUM")
     kcc_high_den=$(get_kcc_effective_value kcc_inflight_high_gain_den "$KCC_HIGH_GAIN_DEN")
+    kcc_kf_steady=$(get_kcc_effective_value kcc_kf_steady_mode "$KCC_KF_STEADY_MODE")
 
     cat > "$SYSCTL_CONF" << EOF
 # /etc/sysctl.d/00-bbr.conf - BBR/KCC 系统变量配置文件
@@ -965,7 +994,7 @@ fs.inotify.max_user_instances = 65536
 net.core.default_qdisc = $qdisc
 net.ipv4.tcp_congestion_control = $congestion_control
 EOF
-    append_kcc_tuning_to_sysctl_conf "$kcc_low_num" "$kcc_low_den" "$kcc_high_num" "$kcc_high_den" || {
+    append_kcc_tuning_to_sysctl_conf "$kcc_low_num" "$kcc_low_den" "$kcc_high_num" "$kcc_high_den" "$kcc_kf_steady" || {
         echo "写入 KCC 调优参数失败"
         return 1
     }
