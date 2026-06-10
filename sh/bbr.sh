@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.3.3"
+SCRIPT_VERSION="1.3.4"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
 KCC_SRC_DIR="/usr/local/src/kcc"
@@ -312,6 +312,7 @@ install_module_file() {
     local module_name=$2
     local display_name=$3
     local module_dir="/lib/modules/$(uname -r)/extra"
+    local installed_module
 
     if [ ! -f "$module_file" ]; then
         echo "未找到已编译模块: $module_file"
@@ -320,8 +321,17 @@ install_module_file() {
 
     echo "安装 $display_name 模块到: $module_dir"
     mkdir -p "$module_dir" || return 1
+    rm -f "$module_dir/$module_name.ko" "$module_dir/$module_name.ko.gz" \
+          "$module_dir/$module_name.ko.xz" "$module_dir/$module_name.ko.zst" || return 1
     install -m 0644 "$module_file" "$module_dir/$module_name.ko" || return 1
     depmod "$(uname -r)" || return 1
+
+    installed_module=$(modinfo -k "$(uname -r)" -n "$module_name" 2>/dev/null || true)
+    if [ -z "$installed_module" ] || [ ! -f "$installed_module" ]; then
+        echo "$display_name 模块安装后未被 modinfo 识别，请检查 depmod 输出。"
+        return 1
+    fi
+    echo "$display_name 模块已安装: $installed_module"
 }
 
 install_kcc_module_file() {
