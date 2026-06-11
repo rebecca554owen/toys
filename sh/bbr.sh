@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.3.12"
+SCRIPT_VERSION="1.3.13"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
 KCC_BRANCH="main"
@@ -111,21 +111,13 @@ get_system_info() {
 }
 
 get_kcc_version_label() {
-    local status running_ver git_ver
+    local status running_ver
 
     status=$(get_kcc_module_status)
     running_ver=$(get_running_module_srcversion tcp_kcc)
 
-    if [ -d "$KCC_SRC_DIR/.git" ]; then
-        git_ver=$(git -C "$KCC_SRC_DIR" log -1 --format="%h %as" 2>/dev/null || true)
-    fi
-
-    if [ -n "$running_ver" ] && [ -n "$git_ver" ]; then
-        echo "$status (src:$running_ver git:$git_ver)"
-    elif [ -n "$running_ver" ]; then
+    if [ -n "$running_ver" ]; then
         echo "$status (src:$running_ver)"
-    elif [ -n "$git_ver" ]; then
-        echo "$status (git:$git_ver)"
     else
         echo "$status"
     fi
@@ -578,11 +570,40 @@ install_bbr_module_file() {
 
 install_bbr_module() {
     local restore_congestion_control reload_status
+    local loaded_srcversion installed_srcversion
 
     require_linux || return 1
     require_root || return 1
 
     echo "====== 编译/安装/更新补丁 BBR 模块 ======"
+
+    loaded_srcversion=$(get_running_module_srcversion tcp_bbr1)
+    installed_srcversion=$(get_installed_module_srcversion tcp_bbr1)
+
+    if [ -n "$installed_srcversion" ] && [ "$loaded_srcversion" = "$installed_srcversion" ]; then
+        echo "当前运行中版本与磁盘版本一致 (src:$loaded_srcversion)，无需重新编译。"
+        read -p "是否仍要强制重新编译？[y/N]: " force_rebuild
+        case $force_rebuild in
+            y|Y) ;;
+            *) echo "已跳过重新编译。"; return 0 ;;
+        esac
+    elif [ -n "$installed_srcversion" ] && [ "$loaded_srcversion" != "$installed_srcversion" ]; then
+        echo "检测到磁盘已有更新版本，尝试直接热替换（无需重新编译）..."
+        restore_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
+        switch_to_fallback_before_module_update bbr1 || return 1
+        reload_congestion_module tcp_bbr1 bbr1 "$(get_installed_module_file tcp_bbr1)" "$restore_congestion_control"
+        reload_status=$?
+        if [ "$reload_status" -eq 0 ]; then
+            has_congestion_control bbr1 && { echo "补丁 BBR 热替换成功。"; echo; get_system_info; }
+            return "$reload_status"
+        elif [ "$reload_status" -eq 2 ]; then
+            echo "补丁 BBR 模块已安装到磁盘，但旧模块仍在运行中。"
+            echo "请重启占用进程或手动重启服务器后生效。"
+            return 2
+        fi
+        echo "热替换失败，继续走重新编译流程..."
+    fi
+
     ensure_build_environment "补丁 BBR 安装" || return 1
     restore_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
     switch_to_fallback_before_module_update bbr1 || return 1
@@ -623,11 +644,40 @@ install_bbr_module() {
 
 install_kcc_module() {
     local restore_congestion_control reload_status
+    local loaded_srcversion installed_srcversion
 
     require_linux || return 1
     require_root || return 1
 
     echo "====== 编译/安装/更新 KCC 模块 ======"
+
+    loaded_srcversion=$(get_running_module_srcversion tcp_kcc)
+    installed_srcversion=$(get_installed_module_srcversion tcp_kcc)
+
+    if [ -n "$installed_srcversion" ] && [ "$loaded_srcversion" = "$installed_srcversion" ]; then
+        echo "当前运行中版本与磁盘版本一致 (src:$loaded_srcversion)，无需重新编译。"
+        read -p "是否仍要强制重新编译？[y/N]: " force_rebuild
+        case $force_rebuild in
+            y|Y) ;;
+            *) echo "已跳过重新编译。"; return 0 ;;
+        esac
+    elif [ -n "$installed_srcversion" ] && [ "$loaded_srcversion" != "$installed_srcversion" ]; then
+        echo "检测到磁盘已有更新版本，尝试直接热替换（无需重新编译）..."
+        restore_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
+        switch_to_fallback_before_module_update kcc || return 1
+        reload_congestion_module tcp_kcc kcc "$(get_installed_module_file tcp_kcc)" "$restore_congestion_control"
+        reload_status=$?
+        if [ "$reload_status" -eq 0 ]; then
+            has_congestion_control kcc && { echo "KCC 热替换成功。"; echo; get_system_info; }
+            return "$reload_status"
+        elif [ "$reload_status" -eq 2 ]; then
+            echo "KCC 模块已安装到磁盘，但旧模块仍在运行中。"
+            echo "请重启占用进程或手动重启服务器后生效。"
+            return 2
+        fi
+        echo "热替换失败，继续走重新编译流程..."
+    fi
+
     ensure_build_environment "KCC 安装" || return 1
     restore_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
     switch_to_fallback_before_module_update kcc || return 1
@@ -685,8 +735,25 @@ ensure_congestion_control_available() {
     has_congestion_control "$name"
 }
 
+try_reload_module_if_stale() {
+    local module_name=$1
+    local congestion_name=$2
+    local installed_module installed_srcversion loaded_srcversion
+
+    loaded_srcversion=$(get_running_module_srcversion "$module_name")
+    installed_srcversion=$(get_installed_module_srcversion "$module_name")
+
+    [ -z "$installed_srcversion" ] && return 0
+    [ "$loaded_srcversion" = "$installed_srcversion" ] && return 0
+
+    echo "$module_name 磁盘版本与运行中版本不一致，尝试热替换..."
+    installed_module=$(get_installed_module_file "$module_name")
+    reload_congestion_module "$module_name" "$congestion_name" "$installed_module" "$congestion_name"
+}
+
 ensure_kcc_ready() {
     if ensure_congestion_control_available kcc; then
+        try_reload_module_if_stale tcp_kcc kcc
         return 0
     fi
 
@@ -705,6 +772,7 @@ ensure_kcc_ready() {
 
 ensure_bbr_ready() {
     if ensure_congestion_control_available bbr1; then
+        try_reload_module_if_stale tcp_bbr1 bbr1
         return 0
     fi
 
