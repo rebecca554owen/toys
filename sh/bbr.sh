@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.3.14"
+SCRIPT_VERSION="1.3.15"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
 KCC_BRANCH="main"
@@ -309,6 +309,7 @@ prepare_kcc_source() {
             echo "无法找到远端分支: origin/$KCC_BRANCH"
             return 1
         fi
+        _KCC_PRE_RESET_COMMIT=$(git -C "$KCC_SRC_DIR" rev-parse HEAD 2>/dev/null || true)
         echo "丢弃本地改动并对齐远端分支: origin/$KCC_BRANCH"
         git -C "$KCC_SRC_DIR" checkout -B "$KCC_BRANCH" "origin/$KCC_BRANCH" || return 1
         git -C "$KCC_SRC_DIR" reset --hard "origin/$KCC_BRANCH" || return 1
@@ -317,6 +318,7 @@ prepare_kcc_source() {
         echo "克隆 KCC 源码到: $KCC_SRC_DIR"
         rm -rf "$KCC_SRC_DIR"
         git clone --branch "$KCC_BRANCH" "$KCC_REPO_URL" "$KCC_SRC_DIR"
+        _KCC_PRE_RESET_COMMIT=""
     fi
 
     echo "KCC 源码版本: $(git -C "$KCC_SRC_DIR" log -1 --oneline)"
@@ -570,63 +572,22 @@ install_bbr_module_file() {
     install_module_file "$KCC_PATCH_DIR/tcp_bbr1.ko" "tcp_bbr1" "补丁 BBR"
 }
 
-try_hot_reload_installed_module() {
-    local module_name=$1
-    local congestion_name=$2
-    local display_name=$3
-    local loaded_srcversion installed_srcversion installed_module reload_status
-
-    loaded_srcversion=$(get_running_module_srcversion "$module_name")
-    installed_srcversion=$(get_installed_module_srcversion "$module_name")
-
-    if [ -z "$installed_srcversion" ]; then
-        return 1
-    fi
-
-    if [ "$loaded_srcversion" = "$installed_srcversion" ]; then
-        echo "当前运行中版本与磁盘版本一致 (src:$loaded_srcversion)，无需重新编译。"
-        read -p "是否仍要强制重新编译？[y/N]: " force_rebuild
-        case $force_rebuild in
-            y|Y) return 1 ;;
-            *) echo "已跳过重新编译。"; return 0 ;;
-        esac
-    fi
-
-    echo "检测到磁盘已有更新版本，尝试直接热替换（无需重新编译）..."
-    local restore_congestion_control
-    restore_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
-    switch_to_fallback_before_module_update "$congestion_name" || return 2
-    installed_module=$(get_installed_module_file "$module_name")
-    reload_congestion_module "$module_name" "$congestion_name" "$installed_module" "$restore_congestion_control"
-    reload_status=$?
-    if [ "$reload_status" -eq 0 ]; then
-        has_congestion_control "$congestion_name" && { echo "$display_name 热替换成功。"; echo; get_system_info; }
-        return 0
-    elif [ "$reload_status" -eq 2 ]; then
-        echo "$display_name 模块已安装到磁盘，但旧模块仍在运行中。"
-        echo "请重启占用进程或手动重启服务器后生效。"
-        return 2
-    fi
-    echo "热替换失败，继续走重新编译流程..."
-    return 1
+kcc_source_changed() {
+    local post_commit
+    post_commit=$(git -C "$KCC_SRC_DIR" rev-parse HEAD 2>/dev/null || true)
+    [ -z "$_KCC_PRE_RESET_COMMIT" ] || [ "$_KCC_PRE_RESET_COMMIT" != "$post_commit" ]
 }
 
 install_bbr_module() {
-    local restore_congestion_control reload_status
+    local restore_congestion_control reload_status loaded_srcversion installed_srcversion installed_module
 
     require_linux || return 1
     require_root || return 1
 
     echo "====== 编译/安装/更新补丁 BBR 模块 ======"
 
-    try_hot_reload_installed_module tcp_bbr1 bbr1 "补丁 BBR"
-    case $? in
-        0) return 0 ;;
-        2) return 2 ;;
-    esac
-
-    ensure_build_environment "补丁 BBR 安装" || return 1
     restore_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
+    ensure_build_environment "补丁 BBR 安装" || return 1
     switch_to_fallback_before_module_update bbr1 || return 1
 
     prepare_kcc_source || return 1
@@ -635,13 +596,22 @@ install_bbr_module() {
         return 1
     fi
 
-    echo "开始编译补丁 BBR..."
-    build_kernel_module "$KCC_PATCH_DIR" || return 1
-
-    install_bbr_module_file || return 1
+    if kcc_source_changed; then
+        echo "检测到源码有更新，开始编译补丁 BBR..."
+        build_kernel_module "$KCC_PATCH_DIR" || return 1
+        install_bbr_module_file || return 1
+    else
+        loaded_srcversion=$(get_running_module_srcversion tcp_bbr1)
+        installed_srcversion=$(get_installed_module_srcversion tcp_bbr1)
+        if [ -n "$installed_srcversion" ] && [ "$loaded_srcversion" = "$installed_srcversion" ]; then
+            echo "源码无变化，运行中版本已是最新 (src:$loaded_srcversion)。"
+            return 0
+        fi
+        echo "源码无变化，磁盘已有更新版本，尝试热替换..."
+    fi
 
     echo "加载 tcp_bbr1 模块..."
-    reload_congestion_module tcp_bbr1 bbr1 "$KCC_PATCH_DIR/tcp_bbr1.ko" "$restore_congestion_control"
+    reload_congestion_module tcp_bbr1 bbr1 "$(get_installed_module_file tcp_bbr1)" "$restore_congestion_control"
     reload_status=$?
     if [ "$reload_status" -eq 2 ]; then
         echo "补丁 BBR 模块已安装到磁盘，但旧模块仍在运行中。"
@@ -664,30 +634,33 @@ install_bbr_module() {
 }
 
 install_kcc_module() {
-    local restore_congestion_control reload_status
+    local restore_congestion_control reload_status loaded_srcversion installed_srcversion
 
     require_linux || return 1
     require_root || return 1
 
     echo "====== 编译/安装/更新 KCC 模块 ======"
 
-    try_hot_reload_installed_module tcp_kcc kcc "KCC"
-    case $? in
-        0) return 0 ;;
-        2) return 2 ;;
-    esac
-
-    ensure_build_environment "KCC 安装" || return 1
     restore_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
+    ensure_build_environment "KCC 安装" || return 1
     switch_to_fallback_before_module_update kcc || return 1
 
     prepare_kcc_source || return 1
 
-    echo "开始编译 KCC..."
-    build_kernel_module "$KCC_SRC_DIR" || return 1
-
-    echo "安装 KCC 模块..."
-    install_kcc_module_file || return 1
+    if kcc_source_changed; then
+        echo "检测到源码有更新，开始编译 KCC..."
+        build_kernel_module "$KCC_SRC_DIR" || return 1
+        echo "安装 KCC 模块..."
+        install_kcc_module_file || return 1
+    else
+        loaded_srcversion=$(get_running_module_srcversion tcp_kcc)
+        installed_srcversion=$(get_installed_module_srcversion tcp_kcc)
+        if [ -n "$installed_srcversion" ] && [ "$loaded_srcversion" = "$installed_srcversion" ]; then
+            echo "源码无变化，运行中版本已是最新 (src:$loaded_srcversion)。"
+            return 0
+        fi
+        echo "源码无变化，磁盘已有更新版本，尝试热替换..."
+    fi
 
     echo "加载 tcp_kcc 模块..."
     reload_congestion_module tcp_kcc kcc "$KCC_SRC_DIR/tcp_kcc.ko" "$restore_congestion_control"
@@ -765,6 +738,7 @@ ensure_kcc_ready() {
     case $install_now in
         ""|y|Y)
             install_kcc_module
+            return $?
             ;;
         *)
             echo "已取消应用 KCC。"
@@ -789,6 +763,7 @@ ensure_bbr_ready() {
     case $install_now in
         ""|y|Y)
             install_bbr_module
+            return $?
             ;;
         *)
             echo "已取消应用 BBR1。"
@@ -1290,12 +1265,8 @@ EOF
         return 1
     }
     echo "配置已写入 $SYSCTL_CONF"
-    if ! sysctl -e -p "$SYSCTL_CONF"; then
+    if ! sysctl -e -q -p "$SYSCTL_CONF"; then
         echo "警告：加载 $SYSCTL_CONF 失败，请检查上方错误。"
-        return 1
-    fi
-    if ! sysctl -w "net.core.default_qdisc=$qdisc" "net.ipv4.tcp_congestion_control=$congestion_control"; then
-        echo "警告：运行时应用队列规则或拥塞控制失败。"
         return 1
     fi
     echo "系统已重新加载配置"
