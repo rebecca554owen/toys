@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.3.17"
+SCRIPT_VERSION="1.3.18"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
 KCC_BRANCH="main"
@@ -857,6 +857,7 @@ apply_optimization_menu() {
 apply_optimization() {
     local selected_qdisc=$1
     local selected_congestion_control=$2
+    local reload_status
 
     require_linux || return 1
     require_root || return 1
@@ -865,9 +866,23 @@ apply_optimization() {
     congestion_control=$selected_congestion_control
 
     if [ "$congestion_control" = "kcc" ]; then
-        ensure_kcc_ready || return 1
+        ensure_kcc_ready || {
+            reload_status=$?
+            if [ "$reload_status" -eq 2 ]; then
+                echo "KCC 模块热替换失败，配置仍会写入，重启后生效。"
+            else
+                return 1
+            fi
+        }
     elif [ "$congestion_control" = "bbr1" ]; then
-        ensure_bbr_ready || return 1
+        ensure_bbr_ready || {
+            reload_status=$?
+            if [ "$reload_status" -eq 2 ]; then
+                echo "BBR1 模块热替换失败，配置仍会写入，重启后生效。"
+            else
+                return 1
+            fi
+        }
     elif ! ensure_congestion_control_available "$congestion_control"; then
         echo "拥塞控制算法 $congestion_control 不可用，未写入配置。"
         return 1
