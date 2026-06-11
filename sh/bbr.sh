@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.3.11"
+SCRIPT_VERSION="1.3.12"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
 KCC_BRANCH="main"
@@ -110,39 +110,25 @@ get_system_info() {
     echo "====================="
 }
 
-get_module_version_label() {
-    local module_name=$1
-    local version srcversion
-
-    version=$(modinfo -F version "$module_name" 2>/dev/null || true)
-    if [ -n "$version" ]; then
-        echo "$version"
-        return
-    fi
-
-    srcversion=$(modinfo -F srcversion "$module_name" 2>/dev/null || true)
-    if [ -n "$srcversion" ]; then
-        echo "src:${srcversion:0:12}"
-        return
-    fi
-
-    echo "未知"
-}
 
 get_kcc_version_label() {
-    local status git_ver mod_ver
+    local status running_ver git_ver
 
     status=$(get_kcc_module_status)
-    mod_ver=$(get_module_version_label tcp_kcc)
+    running_ver=$(get_running_module_srcversion tcp_kcc)
 
     if [ -d "$KCC_SRC_DIR/.git" ]; then
         git_ver=$(git -C "$KCC_SRC_DIR" log -1 --format="%h %as" 2>/dev/null || true)
     fi
 
-    if [ -n "$git_ver" ]; then
-        echo "$status (git:$git_ver mod:$mod_ver)"
+    if [ -n "$running_ver" ] && [ -n "$git_ver" ]; then
+        echo "$status (src:$running_ver git:$git_ver)"
+    elif [ -n "$running_ver" ]; then
+        echo "$status (src:$running_ver)"
+    elif [ -n "$git_ver" ]; then
+        echo "$status (git:$git_ver)"
     else
-        echo "$status ($mod_ver)"
+        echo "$status"
     fi
 }
 
@@ -616,10 +602,12 @@ install_bbr_module() {
     echo "加载 tcp_bbr1 模块..."
     reload_congestion_module tcp_bbr1 bbr1 "$KCC_PATCH_DIR/tcp_bbr1.ko" "$restore_congestion_control"
     reload_status=$?
-    if [ "$reload_status" -ne 0 ]; then
-        if [ "$reload_status" -ne 2 ]; then
-            echo "补丁 BBR 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名模块加载。"
-        fi
+    if [ "$reload_status" -eq 2 ]; then
+        echo "补丁 BBR 模块已安装到磁盘，但旧模块仍在运行中。"
+        echo "请重启占用进程或手动重启服务器后生效。"
+        return 2
+    elif [ "$reload_status" -ne 0 ]; then
+        echo "补丁 BBR 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名模块加载。"
         return 1
     fi
 
@@ -656,10 +644,12 @@ install_kcc_module() {
     echo "加载 tcp_kcc 模块..."
     reload_congestion_module tcp_kcc kcc "$KCC_SRC_DIR/tcp_kcc.ko" "$restore_congestion_control"
     reload_status=$?
-    if [ "$reload_status" -ne 0 ]; then
-        if [ "$reload_status" -ne 2 ]; then
-            echo "KCC 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名内核模块加载。"
-        fi
+    if [ "$reload_status" -eq 2 ]; then
+        echo "KCC 模块已安装到磁盘，但旧模块仍在运行中。"
+        echo "请重启占用进程或手动重启服务器后生效。"
+        return 2
+    elif [ "$reload_status" -ne 0 ]; then
+        echo "KCC 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名内核模块加载。"
         return 1
     fi
 
