@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.3.18"
+SCRIPT_VERSION="1.3.19"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
 KCC_BRANCH="main"
@@ -599,6 +599,11 @@ install_bbr_module() {
     echo "====== 编译/安装/更新补丁 BBR 模块 ======"
 
     restore_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
+    _restore_congestion_on_exit() {
+        [ "$restore_congestion_control" = "bbr1" ] && sysctl -q -w "net.ipv4.tcp_congestion_control=bbr1" 2>/dev/null || true
+    }
+    trap _restore_congestion_on_exit RETURN
+
     ensure_build_environment "补丁 BBR 安装" || return 1
     switch_to_fallback_before_module_update bbr1 || return 1
 
@@ -617,7 +622,6 @@ install_bbr_module() {
         installed_srcversion=$(get_installed_module_srcversion tcp_bbr1)
         if [ -n "$installed_srcversion" ] && [ "$loaded_srcversion" = "$installed_srcversion" ]; then
             echo "源码无变化，运行中版本已是最新 (src:$loaded_srcversion)。"
-            [ "$restore_congestion_control" = "bbr1" ] && sysctl -q -w "net.ipv4.tcp_congestion_control=bbr1"
             return 0
         fi
         echo "源码无变化，磁盘已有更新版本，尝试热替换..."
@@ -634,6 +638,7 @@ install_bbr_module() {
         echo "补丁 BBR 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名模块加载。"
         return 1
     fi
+    trap - RETURN
 
     if has_congestion_control bbr1; then
         echo "补丁 BBR 安装并加载成功。"
@@ -655,6 +660,11 @@ install_kcc_module() {
     echo "====== 编译/安装/更新 KCC 模块 ======"
 
     restore_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
+    _restore_congestion_on_exit() {
+        [ "$restore_congestion_control" = "kcc" ] && sysctl -q -w "net.ipv4.tcp_congestion_control=kcc" 2>/dev/null || true
+    }
+    trap _restore_congestion_on_exit RETURN
+
     ensure_build_environment "KCC 安装" || return 1
     switch_to_fallback_before_module_update kcc || return 1
 
@@ -670,7 +680,6 @@ install_kcc_module() {
         installed_srcversion=$(get_installed_module_srcversion tcp_kcc)
         if [ -n "$installed_srcversion" ] && [ "$loaded_srcversion" = "$installed_srcversion" ]; then
             echo "源码无变化，运行中版本已是最新 (src:$loaded_srcversion)。"
-            [ "$restore_congestion_control" = "kcc" ] && sysctl -q -w "net.ipv4.tcp_congestion_control=kcc"
             return 0
         fi
         echo "源码无变化，磁盘已有更新版本，尝试热替换..."
@@ -687,6 +696,7 @@ install_kcc_module() {
         echo "KCC 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名内核模块加载。"
         return 1
     fi
+    trap - RETURN
 
     if has_congestion_control kcc; then
         echo "KCC 安装并加载成功。"
