@@ -2,9 +2,10 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.3.6"
+SCRIPT_VERSION="1.3.8"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
+KCC_BRANCH="main"
 KCC_SRC_DIR="/usr/local/src/kcc"
 KCC_PATCH_DIR="$KCC_SRC_DIR/google/patch"
 
@@ -283,30 +284,23 @@ prepare_kcc_source() {
 
     if [ -d "$KCC_SRC_DIR/.git" ]; then
         echo "更新 KCC 源码: $KCC_SRC_DIR"
-
-        local current_branch upstream_ref
-        current_branch=$(git -C "$KCC_SRC_DIR" branch --show-current)
-        upstream_ref=$(git -C "$KCC_SRC_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)
-        if [ -z "$upstream_ref" ] && [ -n "$current_branch" ]; then
-            upstream_ref="origin/$current_branch"
-        fi
-        if [ -z "$upstream_ref" ]; then
-            upstream_ref="origin/main"
-        fi
-
+        git -C "$KCC_SRC_DIR" remote set-url origin "$KCC_REPO_URL" || return 1
         git -C "$KCC_SRC_DIR" fetch --prune origin || return 1
-        if ! git -C "$KCC_SRC_DIR" rev-parse --verify "$upstream_ref" >/dev/null 2>&1; then
-            echo "无法找到远端分支: $upstream_ref"
+        if ! git -C "$KCC_SRC_DIR" rev-parse --verify "origin/$KCC_BRANCH" >/dev/null 2>&1; then
+            echo "无法找到远端分支: origin/$KCC_BRANCH"
             return 1
         fi
-        echo "丢弃本地改动并对齐远端分支: $upstream_ref"
-        git -C "$KCC_SRC_DIR" reset --hard "$upstream_ref" || return 1
+        echo "丢弃本地改动并对齐远端分支: origin/$KCC_BRANCH"
+        git -C "$KCC_SRC_DIR" checkout -B "$KCC_BRANCH" "origin/$KCC_BRANCH" || return 1
+        git -C "$KCC_SRC_DIR" reset --hard "origin/$KCC_BRANCH" || return 1
         git -C "$KCC_SRC_DIR" clean -fdx || return 1
     else
         echo "克隆 KCC 源码到: $KCC_SRC_DIR"
         rm -rf "$KCC_SRC_DIR"
-        git clone "$KCC_REPO_URL" "$KCC_SRC_DIR"
+        git clone --branch "$KCC_BRANCH" "$KCC_REPO_URL" "$KCC_SRC_DIR"
     fi
+
+    echo "KCC 源码版本: $(git -C "$KCC_SRC_DIR" log -1 --oneline)"
 }
 
 install_module_file() {
@@ -314,12 +308,14 @@ install_module_file() {
     local module_name=$2
     local display_name=$3
     local module_dir="/lib/modules/$(uname -r)/extra"
-    local installed_module
+    local installed_module module_srcversion installed_srcversion
 
     if [ ! -f "$module_file" ]; then
         echo "未找到已编译模块: $module_file"
         return 1
     fi
+
+    module_srcversion=$(modinfo -F srcversion "$module_file" 2>/dev/null || true)
 
     echo "安装 $display_name 模块到: $module_dir"
     mkdir -p "$module_dir" || return 1
@@ -333,7 +329,15 @@ install_module_file() {
         echo "$display_name 模块安装后未被 modinfo 识别，请检查 depmod 输出。"
         return 1
     fi
+    installed_srcversion=$(modinfo -F srcversion "$installed_module" 2>/dev/null || true)
+    if [ -n "$module_srcversion" ] && [ "$installed_srcversion" != "$module_srcversion" ]; then
+        echo "$display_name 模块安装校验失败：磁盘模块 srcversion 不一致。"
+        echo "编译模块: $module_srcversion"
+        echo "安装模块: ${installed_srcversion:-未知}"
+        return 1
+    fi
     echo "$display_name 模块已安装: $installed_module"
+    [ -n "$installed_srcversion" ] && echo "$display_name 模块磁盘版本: $installed_srcversion"
 }
 
 install_kcc_module_file() {
@@ -350,15 +354,33 @@ build_kernel_module() {
 reload_congestion_module() {
     local module_name=$1
     local congestion_name=$2
-    local old_congestion_control
+    local module_file=$3
+    local old_congestion_control expected_srcversion loaded_srcversion
 
     old_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
+    expected_srcversion=$(modinfo -F srcversion "$module_file" 2>/dev/null || true)
+
     if [ "$old_congestion_control" = "$congestion_name" ] && has_congestion_control cubic; then
         sysctl -w net.ipv4.tcp_congestion_control=cubic || return 1
     fi
 
-    modprobe -r "$module_name" 2>/dev/null || true
+    if lsmod 2>/dev/null | grep -qw "$module_name"; then
+        if ! modprobe -r "$module_name"; then
+            echo "$module_name 当前仍被内核引用，无法卸载旧模块；为避免误用旧模块，已停止。"
+            echo "请等待使用 $congestion_name 的连接结束，或重启后再次运行安装。"
+            return 1
+        fi
+    fi
     modprobe "$module_name" || return 1
+
+    loaded_srcversion=$(cat "/sys/module/$module_name/srcversion" 2>/dev/null || true)
+    if [ -n "$expected_srcversion" ] && [ "$loaded_srcversion" != "$expected_srcversion" ]; then
+        echo "$module_name 加载校验失败：内存模块 srcversion 与新安装模块不一致。"
+        echo "期望版本: $expected_srcversion"
+        echo "加载版本: ${loaded_srcversion:-未知}"
+        return 1
+    fi
+    [ -n "$loaded_srcversion" ] && echo "$module_name 已加载版本: $loaded_srcversion"
 
     if [ "$old_congestion_control" = "$congestion_name" ]; then
         sysctl -w "net.ipv4.tcp_congestion_control=$congestion_name" || return 1
@@ -388,7 +410,7 @@ install_bbr_module() {
     install_bbr_module_file || return 1
 
     echo "加载 tcp_bbr1 模块..."
-    if ! reload_congestion_module tcp_bbr1 bbr1; then
+    if ! reload_congestion_module tcp_bbr1 bbr1 "$KCC_PATCH_DIR/tcp_bbr1.ko"; then
         echo "补丁 BBR 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名模块加载。"
         return 1
     fi
@@ -420,7 +442,7 @@ install_kcc_module() {
     install_kcc_module_file || return 1
 
     echo "加载 tcp_kcc 模块..."
-    if ! reload_congestion_module tcp_kcc kcc; then
+    if ! reload_congestion_module tcp_kcc kcc "$KCC_SRC_DIR/tcp_kcc.ko"; then
         echo "KCC 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名内核模块加载。"
         return 1
     fi
