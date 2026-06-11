@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.3.10"
+SCRIPT_VERSION="1.3.11"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
 KCC_BRANCH="main"
@@ -110,6 +110,42 @@ get_system_info() {
     echo "====================="
 }
 
+get_module_version_label() {
+    local module_name=$1
+    local version srcversion
+
+    version=$(modinfo -F version "$module_name" 2>/dev/null || true)
+    if [ -n "$version" ]; then
+        echo "$version"
+        return
+    fi
+
+    srcversion=$(modinfo -F srcversion "$module_name" 2>/dev/null || true)
+    if [ -n "$srcversion" ]; then
+        echo "src:${srcversion:0:12}"
+        return
+    fi
+
+    echo "未知"
+}
+
+get_kcc_version_label() {
+    local status git_ver mod_ver
+
+    status=$(get_kcc_module_status)
+    mod_ver=$(get_module_version_label tcp_kcc)
+
+    if [ -d "$KCC_SRC_DIR/.git" ]; then
+        git_ver=$(git -C "$KCC_SRC_DIR" log -1 --format="%h %as" 2>/dev/null || true)
+    fi
+
+    if [ -n "$git_ver" ]; then
+        echo "$status (git:$git_ver mod:$mod_ver)"
+    else
+        echo "$status ($mod_ver)"
+    fi
+}
+
 show_current_scheme() {
     local current_qdisc current_cc available_controls
 
@@ -122,7 +158,7 @@ show_current_scheme() {
     echo "队列规则: $current_qdisc"
     echo "拥塞控制: $current_cc"
     echo "可用算法: $available_controls"
-    echo "KCC: $(get_kcc_module_status) | BBR1: $(get_patched_bbr_module_status) | BBR: $(get_bbr_module_status)"
+    echo "KCC: $(get_kcc_version_label) | BBR1: $(get_patched_bbr_module_status) | BBR: $(get_bbr_module_status)"
     echo "====================="
 }
 
@@ -177,7 +213,13 @@ install_build_dependencies() {
 
 install_kernel_update_for_headers() {
     if command -v apt-get >/dev/null 2>&1; then
-        install_packages linux-image-amd64 linux-headers-amd64
+        local deb_arch
+        deb_arch=$(dpkg --print-architecture 2>/dev/null || true)
+        if [ -n "$deb_arch" ] && apt-cache show "linux-image-$deb_arch" >/dev/null 2>&1; then
+            install_packages "linux-image-$deb_arch" "linux-headers-$deb_arch"
+        else
+            install_packages linux-image-generic linux-headers-generic
+        fi
     elif command -v dnf >/dev/null 2>&1; then
         install_packages kernel kernel-devel kernel-headers
     elif command -v yum >/dev/null 2>&1; then
@@ -351,6 +393,46 @@ build_kernel_module() {
     make -C "/lib/modules/$(uname -r)/build" M="$source_dir" modules
 }
 
+get_running_module_srcversion() {
+    local module_name=$1
+
+    cat "/sys/module/$module_name/srcversion" 2>/dev/null || true
+}
+
+get_module_file_srcversion() {
+    local module_file=$1
+
+    modinfo -F srcversion "$module_file" 2>/dev/null || true
+}
+
+get_installed_module_file() {
+    local module_name=$1
+
+    modinfo -k "$(uname -r)" -n "$module_name" 2>/dev/null || true
+}
+
+get_installed_module_srcversion() {
+    local module_name=$1
+    local installed_module
+
+    installed_module=$(get_installed_module_file "$module_name")
+    if [ -n "$installed_module" ] && [ -f "$installed_module" ]; then
+        get_module_file_srcversion "$installed_module"
+    fi
+}
+
+show_module_versions() {
+    local module_name=$1
+    local new_srcversion=$2
+    local installed_srcversion=$3
+    local loaded_srcversion
+
+    loaded_srcversion=$(get_running_module_srcversion "$module_name")
+    echo "$module_name 运行中版本: ${loaded_srcversion:-未加载}"
+    [ -n "$new_srcversion" ] && echo "$module_name 更新后版本: $new_srcversion"
+    [ -n "$installed_srcversion" ] && echo "$module_name 磁盘更新版本: $installed_srcversion"
+}
+
 select_fallback_congestion_control() {
     local congestion_name=$1
     local preferred available candidate
@@ -395,6 +477,7 @@ show_congestion_module_users() {
     local module_name=$1
     local congestion_name=$2
     local use_count
+    local has_non_listen=0 has_listen=0
 
     use_count=$(awk -v module="$module_name" '$1 == module { print $3 }' /proc/modules 2>/dev/null || true)
     [ -n "$use_count" ] && echo "$module_name 当前引用计数: $use_count"
@@ -427,6 +510,32 @@ show_congestion_module_users() {
                 }
             }
         '
+
+        if ss -tanpi 2>/dev/null | awk -v cc="$congestion_name" '
+            /^[^[:space:]]/ { state = $1; next }
+            ($0 ~ (" " cc " ") || $0 ~ ("cong:" cc)) && state != "LISTEN" { found = 1 }
+            END { exit found ? 0 : 1 }
+        '; then
+            has_non_listen=1
+        fi
+        if ss -tanpi 2>/dev/null | awk -v cc="$congestion_name" '
+            /^[^[:space:]]/ { state = $1; next }
+            ($0 ~ (" " cc " ") || $0 ~ ("cong:" cc)) && state == "LISTEN" { found = 1 }
+            END { exit found ? 0 : 1 }
+        '; then
+            has_listen=1
+        fi
+
+        if [ "$has_non_listen" -eq 1 ]; then
+            echo "警告：以下命令会中断系统中对应状态的全部 TCP 连接，包括当前 SSH，不仅限于 $congestion_name。"
+            echo "强烈建议在 screen 或 tmux 会话中执行，以免 SSH 断线后操作中断。"
+            echo "如需强制中断非 LISTEN 长连接，可手动执行："
+            echo "  ss -K state established"
+            echo "  ss -K state close-wait"
+        fi
+        if [ "$has_listen" -eq 1 ]; then
+            echo "LISTEN socket 无法通过 ss -K 清理；请用 'ss -tlnp' 找到占用服务后重启，或手动重启服务器后生效。"
+        fi
     fi
 }
 
@@ -435,21 +544,35 @@ reload_congestion_module() {
     local congestion_name=$2
     local module_file=$3
     local restore_congestion_control=${4:-}
-    local expected_srcversion loaded_srcversion
+    local expected_srcversion installed_srcversion loaded_srcversion
 
-    expected_srcversion=$(modinfo -F srcversion "$module_file" 2>/dev/null || true)
+    expected_srcversion=$(get_module_file_srcversion "$module_file")
+    installed_srcversion=$(get_installed_module_srcversion "$module_name")
+    loaded_srcversion=$(get_running_module_srcversion "$module_name")
+
+    show_module_versions "$module_name" "$expected_srcversion" "$installed_srcversion"
+
+    if [ -n "$expected_srcversion" ] && [ "$loaded_srcversion" = "$expected_srcversion" ]; then
+        echo "$module_name 运行中版本已是最新，无需重新加载模块。"
+        if [ "$restore_congestion_control" = "$congestion_name" ]; then
+            sysctl -w "net.ipv4.tcp_congestion_control=$congestion_name" || return 1
+        fi
+        return 0
+    fi
 
     if lsmod 2>/dev/null | grep -qw "$module_name"; then
         if ! modprobe -r "$module_name"; then
-            echo "$module_name 当前仍被内核引用，无法卸载旧模块；为避免误用旧模块，已停止。"
-            echo "请等待使用 $congestion_name 的连接结束，或重启后再次运行安装。"
+            echo "$module_name 当前仍被内核引用，无法热替换旧模块。"
+            show_module_versions "$module_name" "$expected_srcversion" "$installed_srcversion"
+            echo "新模块已安装到磁盘，但当前运行中仍是旧模块。"
+            echo "请重启占用进程，或手动重启服务器后生效。"
             show_congestion_module_users "$module_name" "$congestion_name"
-            return 1
+            return 2
         fi
     fi
     modprobe "$module_name" || return 1
 
-    loaded_srcversion=$(cat "/sys/module/$module_name/srcversion" 2>/dev/null || true)
+    loaded_srcversion=$(get_running_module_srcversion "$module_name")
     if [ -n "$expected_srcversion" ] && [ "$loaded_srcversion" != "$expected_srcversion" ]; then
         echo "$module_name 加载校验失败：内存模块 srcversion 与新安装模块不一致。"
         echo "期望版本: $expected_srcversion"
@@ -457,6 +580,7 @@ reload_congestion_module() {
         return 1
     fi
     [ -n "$loaded_srcversion" ] && echo "$module_name 已加载版本: $loaded_srcversion"
+    [ -n "$expected_srcversion" ] && echo "$module_name 运行版本与磁盘版本一致。"
 
     if [ "$restore_congestion_control" = "$congestion_name" ]; then
         sysctl -w "net.ipv4.tcp_congestion_control=$congestion_name" || return 1
@@ -468,7 +592,7 @@ install_bbr_module_file() {
 }
 
 install_bbr_module() {
-    local restore_congestion_control
+    local restore_congestion_control reload_status
 
     require_linux || return 1
     require_root || return 1
@@ -490,8 +614,12 @@ install_bbr_module() {
     install_bbr_module_file || return 1
 
     echo "加载 tcp_bbr1 模块..."
-    if ! reload_congestion_module tcp_bbr1 bbr1 "$KCC_PATCH_DIR/tcp_bbr1.ko" "$restore_congestion_control"; then
-        echo "补丁 BBR 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名模块加载。"
+    reload_congestion_module tcp_bbr1 bbr1 "$KCC_PATCH_DIR/tcp_bbr1.ko" "$restore_congestion_control"
+    reload_status=$?
+    if [ "$reload_status" -ne 0 ]; then
+        if [ "$reload_status" -ne 2 ]; then
+            echo "补丁 BBR 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名模块加载。"
+        fi
         return 1
     fi
 
@@ -507,7 +635,7 @@ install_bbr_module() {
 }
 
 install_kcc_module() {
-    local restore_congestion_control
+    local restore_congestion_control reload_status
 
     require_linux || return 1
     require_root || return 1
@@ -526,8 +654,12 @@ install_kcc_module() {
     install_kcc_module_file || return 1
 
     echo "加载 tcp_kcc 模块..."
-    if ! reload_congestion_module tcp_kcc kcc "$KCC_SRC_DIR/tcp_kcc.ko" "$restore_congestion_control"; then
-        echo "KCC 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名内核模块加载。"
+    reload_congestion_module tcp_kcc kcc "$KCC_SRC_DIR/tcp_kcc.ko" "$restore_congestion_control"
+    reload_status=$?
+    if [ "$reload_status" -ne 0 ]; then
+        if [ "$reload_status" -ne 2 ]; then
+            echo "KCC 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名内核模块加载。"
+        fi
         return 1
     fi
 
