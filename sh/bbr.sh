@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.3.15"
+SCRIPT_VERSION="1.3.16"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
 KCC_BRANCH="main"
@@ -605,6 +605,7 @@ install_bbr_module() {
         installed_srcversion=$(get_installed_module_srcversion tcp_bbr1)
         if [ -n "$installed_srcversion" ] && [ "$loaded_srcversion" = "$installed_srcversion" ]; then
             echo "源码无变化，运行中版本已是最新 (src:$loaded_srcversion)。"
+            [ "$restore_congestion_control" = "bbr1" ] && sysctl -q -w "net.ipv4.tcp_congestion_control=bbr1"
             return 0
         fi
         echo "源码无变化，磁盘已有更新版本，尝试热替换..."
@@ -657,6 +658,7 @@ install_kcc_module() {
         installed_srcversion=$(get_installed_module_srcversion tcp_kcc)
         if [ -n "$installed_srcversion" ] && [ "$loaded_srcversion" = "$installed_srcversion" ]; then
             echo "源码无变化，运行中版本已是最新 (src:$loaded_srcversion)。"
+            [ "$restore_congestion_control" = "kcc" ] && sysctl -q -w "net.ipv4.tcp_congestion_control=kcc"
             return 0
         fi
         echo "源码无变化，磁盘已有更新版本，尝试热替换..."
