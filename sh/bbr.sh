@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.3.8"
+SCRIPT_VERSION="1.3.10"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
 KCC_BRANCH="main"
@@ -351,23 +351,99 @@ build_kernel_module() {
     make -C "/lib/modules/$(uname -r)/build" M="$source_dir" modules
 }
 
+select_fallback_congestion_control() {
+    local congestion_name=$1
+    local preferred available candidate
+
+    available=" $(get_available_congestion_controls) "
+    for preferred in cubic reno bbr bbr1; do
+        if [ "$preferred" != "$congestion_name" ] && echo "$available" | grep -qw "$preferred"; then
+            echo "$preferred"
+            return 0
+        fi
+    done
+
+    for candidate in $available; do
+        if [ "$candidate" != "$congestion_name" ] && [ "$candidate" != "未知" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+switch_to_fallback_before_module_update() {
+    local congestion_name=$1
+    local current_congestion_control fallback_congestion_control
+
+    current_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
+    if [ "$current_congestion_control" != "$congestion_name" ]; then
+        return 0
+    fi
+
+    fallback_congestion_control=$(select_fallback_congestion_control "$congestion_name") || {
+        echo "当前默认拥塞控制为 $congestion_name，但未找到其它可用拥塞控制算法作为兜底。"
+        return 1
+    }
+
+    echo "更新前先切换默认拥塞控制到 $fallback_congestion_control，避免新连接继续引用旧 $congestion_name 模块。"
+    sysctl -w "net.ipv4.tcp_congestion_control=$fallback_congestion_control" || return 1
+}
+
+show_congestion_module_users() {
+    local module_name=$1
+    local congestion_name=$2
+    local use_count
+
+    use_count=$(awk -v module="$module_name" '$1 == module { print $3 }' /proc/modules 2>/dev/null || true)
+    [ -n "$use_count" ] && echo "$module_name 当前引用计数: $use_count"
+
+    if command -v ss >/dev/null 2>&1; then
+        echo "仍在使用 $congestion_name 的 socket 进程摘要:"
+        ss -tanpi 2>/dev/null | awk -v cc="$congestion_name" '
+            /^[^[:space:]]/ { state = $1; line = $0; next }
+            ($0 ~ (" " cc " ") || $0 ~ ("cong:" cc)) {
+                name = "unknown"
+                pid = "?"
+                if (match(line, /users:\(\("[^"]+",pid=[0-9]+/)) {
+                    user = substr(line, RSTART, RLENGTH)
+                    sub(/^users:\(\("/, "", user)
+                    split(user, parts, "\",pid=")
+                    name = parts[1]
+                    pid = parts[2]
+                }
+                key = state " " name " pid=" pid
+                count[key]++
+            }
+            END {
+                found = 0
+                for (key in count) {
+                    print "  " count[key] " " key
+                    found = 1
+                }
+                if (!found) {
+                    print "  未从 ss 输出中找到具体 socket；可能是内核内部引用或连接刚变化。"
+                }
+            }
+        '
+    fi
+}
+
 reload_congestion_module() {
     local module_name=$1
     local congestion_name=$2
     local module_file=$3
-    local old_congestion_control expected_srcversion loaded_srcversion
+    local restore_congestion_control=${4:-}
+    local expected_srcversion loaded_srcversion
 
-    old_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
     expected_srcversion=$(modinfo -F srcversion "$module_file" 2>/dev/null || true)
-
-    if [ "$old_congestion_control" = "$congestion_name" ] && has_congestion_control cubic; then
-        sysctl -w net.ipv4.tcp_congestion_control=cubic || return 1
-    fi
 
     if lsmod 2>/dev/null | grep -qw "$module_name"; then
         if ! modprobe -r "$module_name"; then
             echo "$module_name 当前仍被内核引用，无法卸载旧模块；为避免误用旧模块，已停止。"
             echo "请等待使用 $congestion_name 的连接结束，或重启后再次运行安装。"
+            show_congestion_module_users "$module_name" "$congestion_name"
             return 1
         fi
     fi
@@ -382,7 +458,7 @@ reload_congestion_module() {
     fi
     [ -n "$loaded_srcversion" ] && echo "$module_name 已加载版本: $loaded_srcversion"
 
-    if [ "$old_congestion_control" = "$congestion_name" ]; then
+    if [ "$restore_congestion_control" = "$congestion_name" ]; then
         sysctl -w "net.ipv4.tcp_congestion_control=$congestion_name" || return 1
     fi
 }
@@ -392,11 +468,15 @@ install_bbr_module_file() {
 }
 
 install_bbr_module() {
+    local restore_congestion_control
+
     require_linux || return 1
     require_root || return 1
 
     echo "====== 编译/安装/更新补丁 BBR 模块 ======"
     ensure_build_environment "补丁 BBR 安装" || return 1
+    restore_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
+    switch_to_fallback_before_module_update bbr1 || return 1
 
     prepare_kcc_source || return 1
     if [ ! -d "$KCC_PATCH_DIR" ] || [ ! -f "$KCC_PATCH_DIR/tcp_bbr1.c" ]; then
@@ -410,7 +490,7 @@ install_bbr_module() {
     install_bbr_module_file || return 1
 
     echo "加载 tcp_bbr1 模块..."
-    if ! reload_congestion_module tcp_bbr1 bbr1 "$KCC_PATCH_DIR/tcp_bbr1.ko"; then
+    if ! reload_congestion_module tcp_bbr1 bbr1 "$KCC_PATCH_DIR/tcp_bbr1.ko" "$restore_congestion_control"; then
         echo "补丁 BBR 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名模块加载。"
         return 1
     fi
@@ -427,11 +507,15 @@ install_bbr_module() {
 }
 
 install_kcc_module() {
+    local restore_congestion_control
+
     require_linux || return 1
     require_root || return 1
 
     echo "====== 编译/安装/更新 KCC 模块 ======"
     ensure_build_environment "KCC 安装" || return 1
+    restore_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
+    switch_to_fallback_before_module_update kcc || return 1
 
     prepare_kcc_source || return 1
 
@@ -442,7 +526,7 @@ install_kcc_module() {
     install_kcc_module_file || return 1
 
     echo "加载 tcp_kcc 模块..."
-    if ! reload_congestion_module tcp_kcc kcc "$KCC_SRC_DIR/tcp_kcc.ko"; then
+    if ! reload_congestion_module tcp_kcc kcc "$KCC_SRC_DIR/tcp_kcc.ko" "$restore_congestion_control"; then
         echo "KCC 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名内核模块加载。"
         return 1
     fi
