@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.3.16"
+SCRIPT_VERSION="1.3.17"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
 KCC_BRANCH="main"
@@ -400,17 +400,28 @@ get_installed_module_srcversion() {
     fi
 }
 
+get_module_git_version() {
+    local source_dir=$1
+    [ -d "$source_dir/.git" ] || return 1
+    git -C "$source_dir" log -1 --format="%h %s" 2>/dev/null
+}
+
 show_module_versions() {
     local module_name=$1
     local new_srcversion=$2
     local installed_srcversion=$3
-    local loaded_srcversion
+    local source_dir=${4:-}
+    local loaded_srcversion git_version
 
     loaded_srcversion=$(get_running_module_srcversion "$module_name")
     echo "$module_name 运行中版本: ${loaded_srcversion:-未加载}"
     [ -n "$new_srcversion" ] && echo "$module_name 目标版本: $new_srcversion"
     if [ -n "$installed_srcversion" ] && [ "$installed_srcversion" != "$new_srcversion" ]; then
         echo "$module_name 磁盘版本: $installed_srcversion"
+    fi
+    if [ -n "$source_dir" ]; then
+        git_version=$(get_module_git_version "$source_dir" 2>/dev/null || true)
+        [ -n "$git_version" ] && echo "$module_name git版本: $git_version"
     fi
 }
 
@@ -525,13 +536,14 @@ reload_congestion_module() {
     local congestion_name=$2
     local module_file=$3
     local restore_congestion_control=${4:-}
+    local source_dir=${5:-}
     local expected_srcversion installed_srcversion loaded_srcversion
 
     expected_srcversion=$(get_module_file_srcversion "$module_file")
     installed_srcversion=$(get_installed_module_srcversion "$module_name")
     loaded_srcversion=$(get_running_module_srcversion "$module_name")
 
-    show_module_versions "$module_name" "$expected_srcversion" "$installed_srcversion"
+    show_module_versions "$module_name" "$expected_srcversion" "$installed_srcversion" "$source_dir"
 
     if [ -n "$expected_srcversion" ] && [ "$loaded_srcversion" = "$expected_srcversion" ]; then
         echo "$module_name 运行中版本已是最新，无需重新加载模块。"
@@ -544,7 +556,7 @@ reload_congestion_module() {
     if lsmod 2>/dev/null | grep -qw "$module_name"; then
         if ! modprobe -r "$module_name"; then
             echo "$module_name 当前仍被内核引用，无法热替换旧模块。"
-            show_module_versions "$module_name" "$expected_srcversion" "$installed_srcversion"
+            show_module_versions "$module_name" "$expected_srcversion" "$installed_srcversion" "$source_dir"
             echo "新模块已安装到磁盘，但当前运行中仍是旧模块。"
             echo "请重启占用进程，或手动重启服务器后生效。"
             show_congestion_module_users "$module_name" "$congestion_name"
@@ -612,7 +624,7 @@ install_bbr_module() {
     fi
 
     echo "加载 tcp_bbr1 模块..."
-    reload_congestion_module tcp_bbr1 bbr1 "$(get_installed_module_file tcp_bbr1)" "$restore_congestion_control"
+    reload_congestion_module tcp_bbr1 bbr1 "$(get_installed_module_file tcp_bbr1)" "$restore_congestion_control" "$KCC_PATCH_DIR"
     reload_status=$?
     if [ "$reload_status" -eq 2 ]; then
         echo "补丁 BBR 模块已安装到磁盘，但旧模块仍在运行中。"
@@ -665,7 +677,7 @@ install_kcc_module() {
     fi
 
     echo "加载 tcp_kcc 模块..."
-    reload_congestion_module tcp_kcc kcc "$KCC_SRC_DIR/tcp_kcc.ko" "$restore_congestion_control"
+    reload_congestion_module tcp_kcc kcc "$KCC_SRC_DIR/tcp_kcc.ko" "$restore_congestion_control" "$KCC_SRC_DIR"
     reload_status=$?
     if [ "$reload_status" -eq 2 ]; then
         echo "KCC 模块已安装到磁盘，但旧模块仍在运行中。"
@@ -712,7 +724,7 @@ ensure_congestion_control_available() {
 try_reload_module_if_stale() {
     local module_name=$1
     local congestion_name=$2
-    local installed_module installed_srcversion loaded_srcversion
+    local installed_module installed_srcversion loaded_srcversion source_dir
 
     loaded_srcversion=$(get_running_module_srcversion "$module_name")
     installed_srcversion=$(get_installed_module_srcversion "$module_name")
@@ -722,7 +734,11 @@ try_reload_module_if_stale() {
 
     echo "$module_name 磁盘版本与运行中版本不一致，尝试热替换..."
     installed_module=$(get_installed_module_file "$module_name")
-    reload_congestion_module "$module_name" "$congestion_name" "$installed_module" "$congestion_name"
+    case $module_name in
+        tcp_kcc)  source_dir="$KCC_SRC_DIR" ;;
+        tcp_bbr1) source_dir="$KCC_PATCH_DIR" ;;
+    esac
+    reload_congestion_module "$module_name" "$congestion_name" "$installed_module" "$congestion_name" "$source_dir"
 }
 
 ensure_kcc_ready() {
