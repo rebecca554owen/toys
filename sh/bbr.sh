@@ -2,15 +2,16 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.3.19"
+SCRIPT_VERSION="1.3.20"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
+MODULES_LOAD_CONF="/etc/modules-load.d/99-bbr-kcc.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
 KCC_BRANCH="main"
 KCC_SRC_DIR="/usr/local/src/kcc"
 KCC_PATCH_DIR="$KCC_SRC_DIR/google/patch"
 
-qdisc="fq"
-congestion_control="bbr1"
+qdisc="cake"
+congestion_control="kcc"
 KCC_OFFICIAL_LOW_GAIN_NUM=100
 KCC_OFFICIAL_LOW_GAIN_DEN=100
 KCC_AGGRESSIVE_LOW_GAIN_NUM=125
@@ -362,7 +363,8 @@ install_module_file() {
 }
 
 install_kcc_module_file() {
-    install_module_file "$KCC_SRC_DIR/tcp_kcc.ko" "tcp_kcc" "KCC"
+    install_module_file "$KCC_SRC_DIR/tcp_kcc.ko" "tcp_kcc" "KCC" || return 1
+    ensure_module_autoload tcp_kcc
 }
 
 build_kernel_module() {
@@ -581,7 +583,39 @@ reload_congestion_module() {
 }
 
 install_bbr_module_file() {
-    install_module_file "$KCC_PATCH_DIR/tcp_bbr1.ko" "tcp_bbr1" "补丁 BBR"
+    install_module_file "$KCC_PATCH_DIR/tcp_bbr1.ko" "tcp_bbr1" "补丁 BBR" || return 1
+    ensure_module_autoload tcp_bbr1
+}
+
+ensure_module_autoload() {
+    local module_name=$1
+    local conf_dir
+
+    conf_dir=$(dirname "$MODULES_LOAD_CONF")
+    mkdir -p "$conf_dir" || return 1
+    touch "$MODULES_LOAD_CONF" || return 1
+    if ! grep -qxF "$module_name" "$MODULES_LOAD_CONF"; then
+        echo "$module_name" >> "$MODULES_LOAD_CONF" || return 1
+    fi
+}
+
+persist_scheme_if_module_selected() {
+    local congestion_name=$1
+    local saved_congestion_control=$2
+    local saved_qdisc=$3
+
+    if [ "$saved_congestion_control" != "$congestion_name" ]; then
+        return 0
+    fi
+
+    if [ -z "$saved_qdisc" ] || [ "$saved_qdisc" = "未知" ]; then
+        return 0
+    fi
+
+    qdisc=$saved_qdisc
+    congestion_control=$saved_congestion_control
+    echo "持久化当前运行方案: $congestion_control + $qdisc"
+    generate_sysctl_conf
 }
 
 kcc_source_changed() {
@@ -591,7 +625,7 @@ kcc_source_changed() {
 }
 
 install_bbr_module() {
-    local restore_congestion_control reload_status loaded_srcversion installed_srcversion installed_module
+    local restore_congestion_control restore_qdisc reload_status loaded_srcversion installed_srcversion installed_module
 
     require_linux || return 1
     require_root || return 1
@@ -599,6 +633,7 @@ install_bbr_module() {
     echo "====== 编译/安装/更新补丁 BBR 模块 ======"
 
     restore_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
+    restore_qdisc=$(get_sysctl_value net.core.default_qdisc)
     _restore_congestion_on_exit() {
         [ "$restore_congestion_control" = "bbr1" ] && sysctl -q -w "net.ipv4.tcp_congestion_control=bbr1" 2>/dev/null || true
     }
@@ -622,6 +657,8 @@ install_bbr_module() {
         installed_srcversion=$(get_installed_module_srcversion tcp_bbr1)
         if [ -n "$installed_srcversion" ] && [ "$loaded_srcversion" = "$installed_srcversion" ]; then
             echo "源码无变化，运行中版本已是最新 (src:$loaded_srcversion)。"
+            ensure_module_autoload tcp_bbr1 || return 1
+            persist_scheme_if_module_selected bbr1 "$restore_congestion_control" "$restore_qdisc" || return 1
             return 0
         fi
         echo "源码无变化，磁盘已有更新版本，尝试热替换..."
@@ -642,6 +679,7 @@ install_bbr_module() {
 
     if has_congestion_control bbr1; then
         echo "补丁 BBR 安装并加载成功。"
+        persist_scheme_if_module_selected bbr1 "$restore_congestion_control" "$restore_qdisc" || return 1
         echo
         get_system_info
         return 0
@@ -652,7 +690,7 @@ install_bbr_module() {
 }
 
 install_kcc_module() {
-    local restore_congestion_control reload_status loaded_srcversion installed_srcversion
+    local restore_congestion_control restore_qdisc reload_status loaded_srcversion installed_srcversion
 
     require_linux || return 1
     require_root || return 1
@@ -660,6 +698,7 @@ install_kcc_module() {
     echo "====== 编译/安装/更新 KCC 模块 ======"
 
     restore_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
+    restore_qdisc=$(get_sysctl_value net.core.default_qdisc)
     _restore_congestion_on_exit() {
         [ "$restore_congestion_control" = "kcc" ] && sysctl -q -w "net.ipv4.tcp_congestion_control=kcc" 2>/dev/null || true
     }
@@ -680,6 +719,8 @@ install_kcc_module() {
         installed_srcversion=$(get_installed_module_srcversion tcp_kcc)
         if [ -n "$installed_srcversion" ] && [ "$loaded_srcversion" = "$installed_srcversion" ]; then
             echo "源码无变化，运行中版本已是最新 (src:$loaded_srcversion)。"
+            ensure_module_autoload tcp_kcc || return 1
+            persist_scheme_if_module_selected kcc "$restore_congestion_control" "$restore_qdisc" || return 1
             return 0
         fi
         echo "源码无变化，磁盘已有更新版本，尝试热替换..."
@@ -700,6 +741,7 @@ install_kcc_module() {
 
     if has_congestion_control kcc; then
         echo "KCC 安装并加载成功。"
+        persist_scheme_if_module_selected kcc "$restore_congestion_control" "$restore_qdisc" || return 1
         echo
         get_system_info
         return 0
@@ -755,6 +797,7 @@ ensure_kcc_ready() {
     local reload_status
 
     if ensure_congestion_control_available kcc; then
+        ensure_module_autoload tcp_kcc || return 1
         try_reload_module_if_stale tcp_kcc kcc
         reload_status=$?
         [ "$reload_status" -eq 2 ] && return 2
@@ -779,6 +822,7 @@ ensure_bbr_ready() {
     local reload_status
 
     if ensure_congestion_control_available bbr1; then
+        ensure_module_autoload tcp_bbr1 || return 1
         try_reload_module_if_stale tcp_bbr1 bbr1
         reload_status=$?
         [ "$reload_status" -eq 2 ] && return 2
