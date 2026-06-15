@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.4.0"
+SCRIPT_VERSION="1.4.1"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 MODULES_LOAD_CONF="/etc/modules-load.d/99-bbr-kcc.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
@@ -125,18 +125,22 @@ get_kcc_version_label() {
 }
 
 show_current_scheme() {
-    local current_qdisc current_cc available_controls
+    local current_qdisc current_cc available_controls persistent_qdisc persistent_cc
 
     current_qdisc=$(get_sysctl_value net.core.default_qdisc)
     current_cc=$(get_sysctl_value net.ipv4.tcp_congestion_control)
     available_controls=$(get_available_congestion_controls)
+    persistent_qdisc=$(read_sysctl_conf_value net.core.default_qdisc 2>/dev/null || echo "未配置")
+    persistent_cc=$(read_sysctl_conf_value net.ipv4.tcp_congestion_control 2>/dev/null || echo "未配置")
 
-    echo "====== 当前方案 v$SCRIPT_VERSION ======"
+    echo "====== 当前状态 v$SCRIPT_VERSION ======"
     echo "内核版本: $(uname -r)"
-    echo "队列规则: $current_qdisc"
-    echo "拥塞控制: $current_cc"
+    echo "运行方案: qdisc=$current_qdisc, cc=$current_cc"
+    echo "持久方案: qdisc=$persistent_qdisc, cc=$persistent_cc"
     echo "可用算法: $available_controls"
     echo "KCC: $(get_kcc_version_label) | BBR1: $(get_patched_bbr_module_status) | BBR: $(get_bbr_module_status)"
+    echo "开机加载: tcp_kcc=$(get_modules_load_status tcp_kcc), tcp_bbr1=$(get_modules_load_status tcp_bbr1)"
+    show_tcp_congestion_socket_status
     echo "====================="
 }
 
@@ -681,7 +685,7 @@ install_bbr_module() {
         echo "补丁 BBR 安装并加载成功。"
         persist_scheme_if_module_selected bbr1 "$restore_congestion_control" "$restore_qdisc" || return 1
         echo
-        get_system_info
+        show_current_scheme
         return 0
     fi
 
@@ -743,7 +747,7 @@ install_kcc_module() {
         echo "KCC 安装并加载成功。"
         persist_scheme_if_module_selected kcc "$restore_congestion_control" "$restore_qdisc" || return 1
         echo
-        get_system_info
+        show_current_scheme
         return 0
     fi
 
@@ -1073,78 +1077,106 @@ show_persistent_scheme_status() {
 
 show_tcp_congestion_socket_status() {
     if ! command -v ss >/dev/null 2>&1; then
-        echo "====== TCP Socket 拥塞控制 ======"
         echo "ss 不可用，无法检查已有连接/监听 socket 使用的拥塞控制。"
-        echo "====================="
         return 0
     fi
 
-    echo "====== TCP Socket 拥塞控制 ======"
-    ss -tanpi 2>/dev/null | awk '
+    ss -Htanpi 2>/dev/null | awk '
+        function remember_key(key) {
+            if (!seen_key[key]) {
+                seen_key[key] = 1
+                keys[++key_count] = key
+            }
+        }
+        function record_socket(cc) {
+            if (cc == "") {
+                return
+            }
+            total[cc]++
+            if (state == "LISTEN") {
+                listen_total[cc]++
+                key = cc SUBSEP proc_name SUBSEP proc_pid SUBSEP local_addr
+                listen_count[key]++
+                remember_key(key)
+            } else {
+                non_listen[cc]++
+            }
+        }
+        function parse_process(line) {
+            proc_name = "-"
+            proc_pid = "-"
+            if (match(line, /users:\(\("[^"]+",pid=[0-9]+/)) {
+                user = substr(line, RSTART, RLENGTH)
+                sub(/^users:\(\("/, "", user)
+                split(user, parts, "\",pid=")
+                proc_name = parts[1]
+                proc_pid = parts[2]
+            }
+        }
+        function parse_cc(line) {
+            if (match(line, /cong:[^, )]+/)) {
+                return substr(line, RSTART + 5, RLENGTH - 5)
+            }
+            if (line ~ /(^|[[:space:]])kcc([[:space:]]|$)/) {
+                return "kcc"
+            }
+            if (line ~ /(^|[[:space:]])bbr1([[:space:]]|$)/) {
+                return "bbr1"
+            }
+            if (line ~ /(^|[[:space:]])bbr([[:space:]]|$)/) {
+                return "bbr"
+            }
+            return ""
+        }
         /^[^[:space:]]/ {
             state = $1
+            local_addr = $4
+            parse_process($0)
+            record_socket(parse_cc($0))
             next
         }
         {
-            cc = ""
-            if (match($0, /cong:[^, )]+/)) {
-                cc = substr($0, RSTART + 5, RLENGTH - 5)
-            } else if ($0 ~ /(^|[[:space:]])kcc([[:space:]]|$)/) {
-                cc = "kcc"
-            } else if ($0 ~ /(^|[[:space:]])bbr1([[:space:]]|$)/) {
-                cc = "bbr1"
-            } else if ($0 ~ /(^|[[:space:]])bbr([[:space:]]|$)/) {
-                cc = "bbr"
-            }
-            if (cc != "") {
-                total[cc]++
-                by_state[cc, state]++
-                if (state == "LISTEN") {
-                    listen[cc]++
-                } else {
-                    non_listen[cc]++
-                }
-            }
-        }
-        function print_cc(cc) {
-            if (total[cc] > 0) {
-                printf "  %-5s total=%d listen=%d non-listen=%d", cc, total[cc], listen[cc] + 0, non_listen[cc] + 0
-                if (by_state[cc, "ESTAB"] > 0) {
-                    printf " estab=%d", by_state[cc, "ESTAB"]
-                }
-                if (by_state[cc, "TIME-WAIT"] > 0) {
-                    printf " time-wait=%d", by_state[cc, "TIME-WAIT"]
-                }
-                print ""
-            }
+            record_socket(parse_cc($0))
         }
         END {
-            found = 0
-            for (cc in total) {
-                found = 1
-            }
-            if (!found) {
+            if (total["kcc"] + total["bbr"] + total["bbr1"] == 0) {
                 print "  未从 ss 输出中识别到 bbr/bbr1/kcc socket。"
-            } else {
-                print_cc("kcc")
-                print_cc("bbr")
-                print_cc("bbr1")
+                exit
             }
-            if (listen["bbr"] > 0 || listen["bbr1"] > 0) {
-                print "提示：仍有 BBR/BBR1 LISTEN socket；需要重启对应服务，后续新连接才会按当前默认拥塞控制创建。"
+
+            print "监听拥塞控制:"
+            listen_found = 0
+            for (i = 1; i <= key_count; i++) {
+                split(keys[i], parts, SUBSEP)
+                cc = parts[1]
+                if (listen_count[keys[i]] <= 0) {
+                    continue
+                }
+                listen_found = 1
+                mark = ""
+                if (cc == "bbr" || cc == "bbr1") {
+                    mark = "  <- 需要重启服务"
+                    need_restart = 1
+                }
+                printf "  %-5s %3d  %-16s pid=%-7s %s%s\n", cc, listen_count[keys[i]], parts[2], parts[3], parts[4], mark
+            }
+            if (!listen_found) {
+                print "  未识别到 bbr/bbr1/kcc 的 LISTEN socket。"
+            }
+
+            printf "现有非监听连接: kcc=%d, bbr=%d, bbr1=%d\n", non_listen["kcc"] + 0, non_listen["bbr"] + 0, non_listen["bbr1"] + 0
+            if (need_restart) {
+                print "提示：仍有监听服务未使用 kcc，请重启上方标记的服务。"
             }
             if (non_listen["bbr"] > 0 || non_listen["bbr1"] > 0) {
-                print "提示：仍有 BBR/BBR1 非监听连接；这些连接需断开或自然结束后才会消失。"
+                print "提示：非监听旧连接需断开或自然结束，不影响新监听服务切换判断。"
             }
         }
     '
-    echo "====================="
 }
 
 show_kcc_runtime_overview() {
     show_current_scheme
-    show_persistent_scheme_status
-    show_tcp_congestion_socket_status
     show_kcc_tuning_status
 }
 
@@ -1462,7 +1494,7 @@ EOF
     fi
     echo "系统已重新加载配置"
     echo
-    get_system_info
+    show_current_scheme
 }
 
 restore_default_bbr() {
@@ -1479,8 +1511,8 @@ menu() {
         echo "1. 安装/更新 KCC 模块"
         echo "2. 安装/更新 BBR1 模块"
         echo "3. 应用优化方案"
-        echo "4. 当前状态与 KCC 参数调优"
-        echo "5. 查看当前系统状态"
+        echo "4. KCC 参数调优"
+        echo "5. 刷新当前状态"
         echo "6. 恢复默认 BBR (bbr + fq)"
         echo "7. 重启系统"
         echo "0. 退出"
@@ -1500,7 +1532,7 @@ menu() {
                 kcc_tuning_menu
                 ;;
             5)
-                get_system_info
+                show_current_scheme
                 ;;
             6)
                 restore_default_bbr
