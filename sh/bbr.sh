@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.4.3"
+SCRIPT_VERSION="1.4.4"
 SYSCTL_CONF="/etc/sysctl.d/99-bbr-kcc.conf"
 LEGACY_SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 MODULES_LOAD_CONF="/etc/modules-load.d/99-bbr-kcc.conf"
@@ -322,10 +322,9 @@ prepare_kcc_source() {
             return 1
         fi
         _KCC_PRE_RESET_COMMIT=$(git -C "$KCC_SRC_DIR" rev-parse HEAD 2>/dev/null || true)
-        echo "丢弃本地改动并对齐远端分支: origin/$KCC_BRANCH"
+        echo "丢弃源码本地改动并对齐远端分支: origin/$KCC_BRANCH"
         git -C "$KCC_SRC_DIR" checkout -B "$KCC_BRANCH" "origin/$KCC_BRANCH" || return 1
         git -C "$KCC_SRC_DIR" reset --hard "origin/$KCC_BRANCH" || return 1
-        git -C "$KCC_SRC_DIR" clean -fdx || return 1
     else
         echo "克隆 KCC 源码到: $KCC_SRC_DIR"
         rm -rf "$KCC_SRC_DIR"
@@ -461,7 +460,7 @@ select_fallback_congestion_control() {
     return 1
 }
 
-switch_to_fallback_before_module_update() {
+switch_to_fallback_before_module_reload() {
     local congestion_name=$1
     local current_congestion_control fallback_congestion_control
 
@@ -475,7 +474,7 @@ switch_to_fallback_before_module_update() {
         return 1
     }
 
-    echo "更新前先切换默认拥塞控制到 $fallback_congestion_control，避免新连接继续引用旧 $congestion_name 模块。"
+    echo "热替换前临时切换默认拥塞控制到 $fallback_congestion_control，避免新连接继续引用旧 $congestion_name 模块。"
     sysctl -w "net.ipv4.tcp_congestion_control=$fallback_congestion_control" || return 1
 }
 
@@ -552,6 +551,7 @@ reload_congestion_module() {
     local restore_congestion_control=${4:-}
     local source_dir=${5:-}
     local expected_srcversion installed_srcversion loaded_srcversion
+    local switched_to_fallback=0
 
     expected_srcversion=$(get_module_file_srcversion "$module_file")
     installed_srcversion=$(get_installed_module_srcversion "$module_name")
@@ -561,14 +561,18 @@ reload_congestion_module() {
 
     if [ -n "$expected_srcversion" ] && [ "$loaded_srcversion" = "$expected_srcversion" ]; then
         echo "$module_name 运行中版本已是最新，无需重新加载模块。"
-        if [ "$restore_congestion_control" = "$congestion_name" ]; then
-            sysctl -w "net.ipv4.tcp_congestion_control=$congestion_name" || return 1
-        fi
         return 0
     fi
 
     if lsmod 2>/dev/null | grep -qw "$module_name"; then
+        if [ "$restore_congestion_control" = "$congestion_name" ]; then
+            switch_to_fallback_before_module_reload "$congestion_name" || return 1
+            switched_to_fallback=1
+        fi
         if ! modprobe -r "$module_name"; then
+            if [ "$switched_to_fallback" -eq 1 ]; then
+                sysctl -q -w "net.ipv4.tcp_congestion_control=$restore_congestion_control" 2>/dev/null || true
+            fi
             echo "$module_name 当前仍被内核引用，无法热替换旧模块。"
             show_module_versions "$module_name" "$expected_srcversion" "$installed_srcversion" "$source_dir"
             echo "新模块已安装到磁盘，但当前运行中仍是旧模块。"
@@ -577,10 +581,18 @@ reload_congestion_module() {
             return 2
         fi
     fi
-    modprobe "$module_name" || return 1
+    if ! modprobe "$module_name"; then
+        if [ "$switched_to_fallback" -eq 1 ]; then
+            sysctl -q -w "net.ipv4.tcp_congestion_control=$restore_congestion_control" 2>/dev/null || true
+        fi
+        return 1
+    fi
 
     loaded_srcversion=$(get_running_module_srcversion "$module_name")
     if [ -n "$expected_srcversion" ] && [ "$loaded_srcversion" != "$expected_srcversion" ]; then
+        if [ "$switched_to_fallback" -eq 1 ]; then
+            sysctl -q -w "net.ipv4.tcp_congestion_control=$restore_congestion_control" 2>/dev/null || true
+        fi
         echo "$module_name 加载校验失败：内存模块 srcversion 与新安装模块不一致。"
         echo "期望版本: $expected_srcversion"
         echo "加载版本: ${loaded_srcversion:-未知}"
@@ -718,13 +730,7 @@ install_bbr_module() {
 
     restore_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
     restore_qdisc=$(get_sysctl_value net.core.default_qdisc)
-    _restore_congestion_on_exit() {
-        [ "$restore_congestion_control" = "bbr1" ] && sysctl -q -w "net.ipv4.tcp_congestion_control=bbr1" 2>/dev/null || true
-    }
-    trap _restore_congestion_on_exit RETURN
-
     ensure_build_environment "补丁 BBR 安装" || return 1
-    switch_to_fallback_before_module_update bbr1 || return 1
 
     prepare_kcc_source || return 1
     if [ ! -d "$KCC_PATCH_DIR" ] || [ ! -f "$KCC_PATCH_DIR/tcp_bbr1.c" ]; then
@@ -760,8 +766,6 @@ install_bbr_module() {
         echo "补丁 BBR 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名模块加载。"
         return 1
     fi
-    trap - RETURN
-
     if has_congestion_control bbr1; then
         echo "补丁 BBR 安装并加载成功。"
         persist_scheme_if_module_selected bbr1 "$restore_congestion_control" "$restore_qdisc" || return 1
@@ -784,13 +788,7 @@ install_kcc_module() {
 
     restore_congestion_control=$(get_sysctl_value net.ipv4.tcp_congestion_control)
     restore_qdisc=$(get_sysctl_value net.core.default_qdisc)
-    _restore_congestion_on_exit() {
-        [ "$restore_congestion_control" = "kcc" ] && sysctl -q -w "net.ipv4.tcp_congestion_control=kcc" 2>/dev/null || true
-    }
-    trap _restore_congestion_on_exit RETURN
-
     ensure_build_environment "KCC 安装" || return 1
-    switch_to_fallback_before_module_update kcc || return 1
 
     prepare_kcc_source || return 1
 
@@ -823,8 +821,6 @@ install_kcc_module() {
         echo "KCC 模块加载失败。若系统启用了 Secure Boot，可能会阻止未签名内核模块加载。"
         return 1
     fi
-    trap - RETURN
-
     if has_congestion_control kcc; then
         echo "KCC 安装并加载成功。"
         persist_scheme_if_module_selected kcc "$restore_congestion_control" "$restore_qdisc" || return 1
@@ -1458,11 +1454,12 @@ kcc_tuning_menu() {
         echo "1. 官方通用稳态：low_gain = 1.0x，降低 RETR"
         echo "2. 激进竞争模式：low_gain = 1.25x，抢占带宽"
         echo "3. KF 稳态峰值模式：当前 $kf_label"
-        echo "4. 刷新当前状态"
         echo "0. 返回主菜单"
-        read -p "请输入选择 [0-4]: " choice
+        read -p "请输入选择 [0-3]，回车刷新: " choice
 
         case $choice in
+            "")
+                ;;
             1)
                 apply_kcc_tuning "$KCC_OFFICIAL_LOW_GAIN_NUM" "$KCC_OFFICIAL_LOW_GAIN_DEN" "$KCC_HIGH_GAIN_NUM" "$KCC_HIGH_GAIN_DEN" "$kf_current"
                 ;;
@@ -1475,8 +1472,6 @@ kcc_tuning_menu() {
                     "$(get_kcc_effective_value kcc_inflight_high_gain_num "$KCC_HIGH_GAIN_NUM")" \
                     "$(get_kcc_effective_value kcc_inflight_high_gain_den "$KCC_HIGH_GAIN_DEN")" \
                     "$kf_new"
-                ;;
-            4)
                 ;;
             0)
                 return 0
@@ -1663,13 +1658,15 @@ menu() {
         echo "2. 安装/更新 BBR1 模块"
         echo "3. 应用优化方案"
         echo "4. KCC 参数调优"
-        echo "5. 刷新当前状态"
+        echo "5. 查看详细状态"
         echo "6. 恢复默认 BBR (bbr + fq)"
         echo "7. 重启系统"
         echo "0. 退出"
-        read -p "请输入选项 [0-7]: " option
+        read -p "请输入选项 [0-7]，回车刷新: " option
 
         case $option in
+            "")
+                ;;
             1)
                 install_kcc_module
                 ;;
