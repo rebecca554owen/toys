@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.3.20"
+SCRIPT_VERSION="1.4.0"
 SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 MODULES_LOAD_CONF="/etc/modules-load.d/99-bbr-kcc.conf"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
@@ -1047,6 +1047,107 @@ show_kcc_tuning_status() {
     echo "====================="
 }
 
+get_modules_load_status() {
+    local module_name=$1
+
+    if [ -f "$MODULES_LOAD_CONF" ] && grep -qxF "$module_name" "$MODULES_LOAD_CONF"; then
+        echo "已配置"
+    else
+        echo "未配置"
+    fi
+}
+
+show_persistent_scheme_status() {
+    local persistent_qdisc persistent_cc
+
+    persistent_qdisc=$(read_sysctl_conf_value net.core.default_qdisc 2>/dev/null || echo "未配置")
+    persistent_cc=$(read_sysctl_conf_value net.ipv4.tcp_congestion_control 2>/dev/null || echo "未配置")
+
+    echo "====== 持久化配置 ======"
+    echo "sysctl 文件: $SYSCTL_CONF"
+    echo "持久队列规则: $persistent_qdisc"
+    echo "持久拥塞控制: $persistent_cc"
+    echo "模块开机加载: tcp_kcc=$(get_modules_load_status tcp_kcc), tcp_bbr1=$(get_modules_load_status tcp_bbr1)"
+    echo "====================="
+}
+
+show_tcp_congestion_socket_status() {
+    if ! command -v ss >/dev/null 2>&1; then
+        echo "====== TCP Socket 拥塞控制 ======"
+        echo "ss 不可用，无法检查已有连接/监听 socket 使用的拥塞控制。"
+        echo "====================="
+        return 0
+    fi
+
+    echo "====== TCP Socket 拥塞控制 ======"
+    ss -tanpi 2>/dev/null | awk '
+        /^[^[:space:]]/ {
+            state = $1
+            next
+        }
+        {
+            cc = ""
+            if (match($0, /cong:[^, )]+/)) {
+                cc = substr($0, RSTART + 5, RLENGTH - 5)
+            } else if ($0 ~ /(^|[[:space:]])kcc([[:space:]]|$)/) {
+                cc = "kcc"
+            } else if ($0 ~ /(^|[[:space:]])bbr1([[:space:]]|$)/) {
+                cc = "bbr1"
+            } else if ($0 ~ /(^|[[:space:]])bbr([[:space:]]|$)/) {
+                cc = "bbr"
+            }
+            if (cc != "") {
+                total[cc]++
+                by_state[cc, state]++
+                if (state == "LISTEN") {
+                    listen[cc]++
+                } else {
+                    non_listen[cc]++
+                }
+            }
+        }
+        function print_cc(cc) {
+            if (total[cc] > 0) {
+                printf "  %-5s total=%d listen=%d non-listen=%d", cc, total[cc], listen[cc] + 0, non_listen[cc] + 0
+                if (by_state[cc, "ESTAB"] > 0) {
+                    printf " estab=%d", by_state[cc, "ESTAB"]
+                }
+                if (by_state[cc, "TIME-WAIT"] > 0) {
+                    printf " time-wait=%d", by_state[cc, "TIME-WAIT"]
+                }
+                print ""
+            }
+        }
+        END {
+            found = 0
+            for (cc in total) {
+                found = 1
+            }
+            if (!found) {
+                print "  未从 ss 输出中识别到 bbr/bbr1/kcc socket。"
+            } else {
+                print_cc("kcc")
+                print_cc("bbr")
+                print_cc("bbr1")
+            }
+            if (listen["bbr"] > 0 || listen["bbr1"] > 0) {
+                print "提示：仍有 BBR/BBR1 LISTEN socket；需要重启对应服务，后续新连接才会按当前默认拥塞控制创建。"
+            }
+            if (non_listen["bbr"] > 0 || non_listen["bbr1"] > 0) {
+                print "提示：仍有 BBR/BBR1 非监听连接；这些连接需断开或自然结束后才会消失。"
+            }
+        }
+    '
+    echo "====================="
+}
+
+show_kcc_runtime_overview() {
+    show_current_scheme
+    show_persistent_scheme_status
+    show_tcp_congestion_socket_status
+    show_kcc_tuning_status
+}
+
 write_sysctl_conf_value() {
     local key=$1
     local value=$2
@@ -1175,7 +1276,7 @@ kcc_tuning_menu() {
             kf_new=1
         fi
 
-        echo "====== KCC 参数调优 ======"
+        echo "====== 当前状态与 KCC 参数调优 ======"
         echo
         echo "说明:"
         echo "  low_gain        控制 KCC 稳态 inflight 下限。"
@@ -1183,13 +1284,14 @@ kcc_tuning_menu() {
         echo "  1.25x 更激进，可在 BBR/CUBIC 竞争中抢占更多带宽。"
         echo "  kf_steady_mode  新连接用全局 Kalman 历史峰值估算初始带宽。"
         echo
-        show_kcc_tuning_status
+        show_kcc_runtime_overview
         echo
         echo "1. 官方通用稳态：low_gain = 1.0x，降低 RETR"
         echo "2. 激进竞争模式：low_gain = 1.25x，抢占带宽"
         echo "3. KF 稳态峰值模式：当前 $kf_label"
+        echo "4. 刷新当前状态"
         echo "0. 返回主菜单"
-        read -p "请输入选择 [0-3]: " choice
+        read -p "请输入选择 [0-4]: " choice
 
         case $choice in
             1)
@@ -1204,6 +1306,8 @@ kcc_tuning_menu() {
                     "$(get_kcc_effective_value kcc_inflight_high_gain_num "$KCC_HIGH_GAIN_NUM")" \
                     "$(get_kcc_effective_value kcc_inflight_high_gain_den "$KCC_HIGH_GAIN_DEN")" \
                     "$kf_new"
+                ;;
+            4)
                 ;;
             0)
                 return 0
@@ -1375,7 +1479,7 @@ menu() {
         echo "1. 安装/更新 KCC 模块"
         echo "2. 安装/更新 BBR1 模块"
         echo "3. 应用优化方案"
-        echo "4. KCC 参数调优"
+        echo "4. 当前状态与 KCC 参数调优"
         echo "5. 查看当前系统状态"
         echo "6. 恢复默认 BBR (bbr + fq)"
         echo "7. 重启系统"
