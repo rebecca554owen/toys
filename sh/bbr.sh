@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.4.2"
+SCRIPT_VERSION="1.4.3"
 SYSCTL_CONF="/etc/sysctl.d/99-bbr-kcc.conf"
 LEGACY_SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 MODULES_LOAD_CONF="/etc/modules-load.d/99-bbr-kcc.conf"
@@ -128,6 +128,7 @@ get_kcc_version_label() {
 }
 
 show_current_scheme() {
+    local socket_mode=${1:-compact}
     local current_qdisc current_cc available_controls persistent_qdisc persistent_cc
 
     current_qdisc=$(get_sysctl_value net.core.default_qdisc)
@@ -146,8 +147,7 @@ show_current_scheme() {
     echo "可用算法: $available_controls"
     echo "KCC: $(get_kcc_version_label) | BBR1: $(get_patched_bbr_module_status) | BBR: $(get_bbr_module_status)"
     echo "开机加载: tcp_kcc=$(get_modules_load_status tcp_kcc), tcp_bbr1=$(get_modules_load_status tcp_bbr1), 启动应用=$(get_boot_apply_status)"
-    show_tcp_congestion_socket_status
-    show_sysctl_override_hints
+    show_tcp_congestion_socket_status "$socket_mode"
     echo "====================="
 }
 
@@ -1189,12 +1189,14 @@ show_persistent_scheme_status() {
 }
 
 show_tcp_congestion_socket_status() {
+    local mode=${1:-detail}
+
     if ! command -v ss >/dev/null 2>&1; then
         echo "ss 不可用，无法检查已有连接/监听 socket 使用的拥塞控制。"
         return 0
     fi
 
-    ss -Htanpi 2>/dev/null | awk '
+    ss -Htanpi 2>/dev/null | awk -v mode="$mode" '
         function remember_key(key) {
             if (!seen_key[key]) {
                 seen_key[key] = 1
@@ -1257,7 +1259,19 @@ show_tcp_congestion_socket_status() {
                 exit
             }
 
-            print "监听拥塞控制:"
+            printf "监听摘要: kcc=%d, bbr=%d, bbr1=%d\n", listen_total["kcc"] + 0, listen_total["bbr"] + 0, listen_total["bbr1"] + 0
+            printf "现有非监听连接: kcc=%d, bbr=%d, bbr1=%d\n", non_listen["kcc"] + 0, non_listen["bbr"] + 0, non_listen["bbr1"] + 0
+            need_restart = (listen_total["bbr"] > 0 || listen_total["bbr1"] > 0)
+
+            if (mode != "detail" && !need_restart) {
+                exit
+            }
+
+            if (mode == "detail") {
+                print "监听拥塞控制:"
+            } else {
+                print "需要重启的监听服务:"
+            }
             listen_found = 0
             for (i = 1; i <= key_count; i++) {
                 split(keys[i], parts, SUBSEP)
@@ -1265,19 +1279,24 @@ show_tcp_congestion_socket_status() {
                 if (listen_count[keys[i]] <= 0) {
                     continue
                 }
+                if (mode != "detail" && cc == "kcc") {
+                    continue
+                }
                 listen_found = 1
                 mark = ""
                 if (cc == "bbr" || cc == "bbr1") {
                     mark = "  <- 需要重启服务"
-                    need_restart = 1
                 }
                 printf "  %-5s %3d  %-16s pid=%-7s %s%s\n", cc, listen_count[keys[i]], parts[2], parts[3], parts[4], mark
             }
             if (!listen_found) {
-                print "  未识别到 bbr/bbr1/kcc 的 LISTEN socket。"
+                if (mode == "detail") {
+                    print "  未识别到 bbr/bbr1/kcc 的 LISTEN socket。"
+                } else {
+                    print "  无"
+                }
             }
 
-            printf "现有非监听连接: kcc=%d, bbr=%d, bbr1=%d\n", non_listen["kcc"] + 0, non_listen["bbr"] + 0, non_listen["bbr1"] + 0
             if (need_restart) {
                 print "提示：仍有监听服务未使用 kcc，请重启上方标记的服务。"
             }
@@ -1291,6 +1310,11 @@ show_tcp_congestion_socket_status() {
 show_kcc_runtime_overview() {
     show_current_scheme
     show_kcc_tuning_status
+}
+
+show_detailed_status() {
+    show_current_scheme detail
+    show_sysctl_override_hints
 }
 
 write_sysctl_conf_value() {
@@ -1659,7 +1683,7 @@ menu() {
                 kcc_tuning_menu
                 ;;
             5)
-                show_current_scheme
+                show_detailed_status
                 ;;
             6)
                 restore_default_bbr
