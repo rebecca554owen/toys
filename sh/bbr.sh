@@ -2,9 +2,12 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.4.1"
-SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
+SCRIPT_VERSION="1.4.2"
+SYSCTL_CONF="/etc/sysctl.d/99-bbr-kcc.conf"
+LEGACY_SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 MODULES_LOAD_CONF="/etc/modules-load.d/99-bbr-kcc.conf"
+BOOT_APPLY_SCRIPT="/usr/local/sbin/bbr-kcc-apply"
+BOOT_APPLY_SERVICE="/etc/systemd/system/bbr-kcc-apply.service"
 KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
 KCC_BRANCH="main"
 KCC_SRC_DIR="/usr/local/src/kcc"
@@ -137,10 +140,14 @@ show_current_scheme() {
     echo "内核版本: $(uname -r)"
     echo "运行方案: qdisc=$current_qdisc, cc=$current_cc"
     echo "持久方案: qdisc=$persistent_qdisc, cc=$persistent_cc"
+    if [ "$current_qdisc" != "$persistent_qdisc" ] || [ "$current_cc" != "$persistent_cc" ]; then
+        echo "提示：运行方案与持久方案不一致，可能被其它启动配置或服务覆盖。"
+    fi
     echo "可用算法: $available_controls"
     echo "KCC: $(get_kcc_version_label) | BBR1: $(get_patched_bbr_module_status) | BBR: $(get_bbr_module_status)"
-    echo "开机加载: tcp_kcc=$(get_modules_load_status tcp_kcc), tcp_bbr1=$(get_modules_load_status tcp_bbr1)"
+    echo "开机加载: tcp_kcc=$(get_modules_load_status tcp_kcc), tcp_bbr1=$(get_modules_load_status tcp_bbr1), 启动应用=$(get_boot_apply_status)"
     show_tcp_congestion_socket_status
+    show_sysctl_override_hints
     echo "====================="
 }
 
@@ -368,7 +375,8 @@ install_module_file() {
 
 install_kcc_module_file() {
     install_module_file "$KCC_SRC_DIR/tcp_kcc.ko" "tcp_kcc" "KCC" || return 1
-    ensure_module_autoload tcp_kcc
+    ensure_module_autoload tcp_kcc || return 1
+    ensure_boot_apply_service
 }
 
 build_kernel_module() {
@@ -588,7 +596,8 @@ reload_congestion_module() {
 
 install_bbr_module_file() {
     install_module_file "$KCC_PATCH_DIR/tcp_bbr1.ko" "tcp_bbr1" "补丁 BBR" || return 1
-    ensure_module_autoload tcp_bbr1
+    ensure_module_autoload tcp_bbr1 || return 1
+    ensure_boot_apply_service
 }
 
 ensure_module_autoload() {
@@ -601,6 +610,77 @@ ensure_module_autoload() {
     if ! grep -qxF "$module_name" "$MODULES_LOAD_CONF"; then
         echo "$module_name" >> "$MODULES_LOAD_CONF" || return 1
     fi
+}
+
+ensure_boot_apply_service() {
+    local script_dir service_dir
+
+    command -v systemctl >/dev/null 2>&1 || return 0
+
+    script_dir=$(dirname "$BOOT_APPLY_SCRIPT")
+    service_dir=$(dirname "$BOOT_APPLY_SERVICE")
+    mkdir -p "$script_dir" "$service_dir" || return 1
+
+    cat > "$BOOT_APPLY_SCRIPT" << EOF
+#!/bin/sh
+set -eu
+
+SYSCTL_CONF="$SYSCTL_CONF"
+
+read_conf_value() {
+    key=\$1
+    [ -f "\$SYSCTL_CONF" ] || return 1
+    awk -F= -v key="\$key" '
+        {
+            lhs = \$1
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", lhs)
+        }
+        lhs == key {
+            rhs = \$2
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", rhs)
+            print rhs
+            found = 1
+            exit
+        }
+        END { if (!found) exit 1 }
+    ' "\$SYSCTL_CONF"
+}
+
+qdisc=\$(read_conf_value net.core.default_qdisc 2>/dev/null || echo cake)
+cc=\$(read_conf_value net.ipv4.tcp_congestion_control 2>/dev/null || echo kcc)
+
+if [ "\$cc" = "kcc" ]; then
+    modprobe tcp_kcc 2>/dev/null || true
+elif [ "\$cc" = "bbr1" ]; then
+    modprobe tcp_bbr1 2>/dev/null || true
+elif [ "\$cc" = "bbr" ]; then
+    modprobe tcp_bbr 2>/dev/null || true
+fi
+
+sysctl -q -w "net.core.default_qdisc=\$qdisc" || true
+sysctl -q -w "net.ipv4.tcp_congestion_control=\$cc" || true
+EOF
+    chmod 0755 "$BOOT_APPLY_SCRIPT" || return 1
+
+    cat > "$BOOT_APPLY_SERVICE" << EOF
+[Unit]
+Description=Apply BBR/KCC congestion control defaults before services listen
+DefaultDependencies=no
+After=local-fs.target systemd-modules-load.service
+Before=network-pre.target network.target multi-user.target docker.service nginx.service ssh.service sshd.service smbd.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=$BOOT_APPLY_SCRIPT
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload || return 1
+    systemctl enable "$(basename "$BOOT_APPLY_SERVICE")" >/dev/null 2>&1 || return 1
 }
 
 persist_scheme_if_module_selected() {
@@ -662,6 +742,7 @@ install_bbr_module() {
         if [ -n "$installed_srcversion" ] && [ "$loaded_srcversion" = "$installed_srcversion" ]; then
             echo "源码无变化，运行中版本已是最新 (src:$loaded_srcversion)。"
             ensure_module_autoload tcp_bbr1 || return 1
+            ensure_boot_apply_service || return 1
             persist_scheme_if_module_selected bbr1 "$restore_congestion_control" "$restore_qdisc" || return 1
             return 0
         fi
@@ -724,6 +805,7 @@ install_kcc_module() {
         if [ -n "$installed_srcversion" ] && [ "$loaded_srcversion" = "$installed_srcversion" ]; then
             echo "源码无变化，运行中版本已是最新 (src:$loaded_srcversion)。"
             ensure_module_autoload tcp_kcc || return 1
+            ensure_boot_apply_service || return 1
             persist_scheme_if_module_selected kcc "$restore_congestion_control" "$restore_qdisc" || return 1
             return 0
         fi
@@ -802,6 +884,7 @@ ensure_kcc_ready() {
 
     if ensure_congestion_control_available kcc; then
         ensure_module_autoload tcp_kcc || return 1
+        ensure_boot_apply_service || return 1
         try_reload_module_if_stale tcp_kcc kcc
         reload_status=$?
         [ "$reload_status" -eq 2 ] && return 2
@@ -827,6 +910,7 @@ ensure_bbr_ready() {
 
     if ensure_congestion_control_available bbr1; then
         ensure_module_autoload tcp_bbr1 || return 1
+        ensure_boot_apply_service || return 1
         try_reload_module_if_stale tcp_bbr1 bbr1
         reload_status=$?
         [ "$reload_status" -eq 2 ] && return 2
@@ -975,22 +1059,26 @@ format_kcc_gain() {
 
 read_sysctl_conf_value() {
     local key=$1
+    local conf
 
-    [ -f "$SYSCTL_CONF" ] || return 1
-    awk -F= -v key="$key" '
-        {
-            lhs = $1
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", lhs)
-        }
-        lhs == key {
-            rhs = $2
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", rhs)
-            print rhs
-            found = 1
-            exit
-        }
-        END { if (!found) exit 1 }
-    ' "$SYSCTL_CONF"
+    for conf in "$SYSCTL_CONF" "$LEGACY_SYSCTL_CONF"; do
+        [ -f "$conf" ] || continue
+        awk -F= -v key="$key" '
+            {
+                lhs = $1
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", lhs)
+            }
+            lhs == key {
+                rhs = $2
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", rhs)
+                print rhs
+                found = 1
+                exit
+            }
+            END { if (!found) exit 1 }
+        ' "$conf" && return 0
+    done
+    return 1
 }
 
 get_kcc_persistent_value() {
@@ -1061,6 +1149,31 @@ get_modules_load_status() {
     fi
 }
 
+get_boot_apply_status() {
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "无 systemd"
+    elif systemctl is-enabled "$(basename "$BOOT_APPLY_SERVICE")" >/dev/null 2>&1; then
+        echo "已启用"
+    elif [ -f "$BOOT_APPLY_SERVICE" ]; then
+        echo "未启用"
+    else
+        echo "未配置"
+    fi
+}
+
+show_sysctl_override_hints() {
+    local matches
+
+    matches=$(grep -HnE '^[[:space:]]*net\.(core\.default_qdisc|ipv4\.tcp_congestion_control)[[:space:]]*=' \
+        /etc/sysctl.conf /etc/sysctl.d/*.conf /run/sysctl.d/*.conf \
+        /usr/local/lib/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf /lib/sysctl.d/*.conf \
+        2>/dev/null || true)
+    [ -n "$matches" ] || return 0
+
+    echo "sysctl 相关配置:"
+    echo "$matches" | sed 's/^/  /'
+}
+
 show_persistent_scheme_status() {
     local persistent_qdisc persistent_cc
 
@@ -1071,7 +1184,7 @@ show_persistent_scheme_status() {
     echo "sysctl 文件: $SYSCTL_CONF"
     echo "持久队列规则: $persistent_qdisc"
     echo "持久拥塞控制: $persistent_cc"
-    echo "模块开机加载: tcp_kcc=$(get_modules_load_status tcp_kcc), tcp_bbr1=$(get_modules_load_status tcp_bbr1)"
+    echo "模块开机加载: tcp_kcc=$(get_modules_load_status tcp_kcc), tcp_bbr1=$(get_modules_load_status tcp_bbr1), 启动应用=$(get_boot_apply_status)"
     echo "====================="
 }
 
@@ -1370,6 +1483,16 @@ net.kcc.kcc_kf_steady_mode = $kf_steady
 EOF
 }
 
+archive_legacy_sysctl_conf() {
+    if [ "$LEGACY_SYSCTL_CONF" = "$SYSCTL_CONF" ] || [ ! -f "$LEGACY_SYSCTL_CONF" ]; then
+        return 0
+    fi
+
+    if grep -q 'BBR/KCC 系统变量配置文件' "$LEGACY_SYSCTL_CONF" 2>/dev/null; then
+        mv "$LEGACY_SYSCTL_CONF" "$LEGACY_SYSCTL_CONF.disabled-by-bbr-kcc" 2>/dev/null || true
+    fi
+}
+
 # 生成sysctl配置并应用
 generate_sysctl_conf() {
     local kcc_low_num kcc_low_den kcc_high_num kcc_high_den kcc_kf_steady
@@ -1487,7 +1610,11 @@ EOF
         echo "写入 KCC 调优参数失败"
         return 1
     }
+    archive_legacy_sysctl_conf
     echo "配置已写入 $SYSCTL_CONF"
+    ensure_boot_apply_service || {
+        echo "警告：配置启动应用服务失败，重启后可能被其它配置覆盖。"
+    }
     if ! sysctl -e -q -p "$SYSCTL_CONF"; then
         echo "警告：加载 $SYSCTL_CONF 失败，请检查上方错误。"
         return 1
