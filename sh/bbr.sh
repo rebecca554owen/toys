@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.4.7"
+SCRIPT_VERSION="1.4.8"
 SYSCTL_CONF="/etc/sysctl.d/99-bbr-kcc.conf"
 MODULES_LOAD_CONF="/etc/modules-load.d/99-bbr-kcc.conf"
 BOOT_APPLY_SCRIPT="/usr/local/sbin/bbr-kcc-apply"
@@ -811,6 +811,7 @@ install_kcc_module() {
     reload_status=$?
     if [ "$reload_status" -eq 2 ]; then
         echo "KCC 模块已安装到磁盘，但旧模块仍在运行中。"
+        persist_scheme_if_module_selected kcc "$restore_congestion_control" "$restore_qdisc" || return 1
         echo "请重启占用进程或手动重启服务器后生效。"
         return 2
     elif [ "$reload_status" -ne 0 ]; then
