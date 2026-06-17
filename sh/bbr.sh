@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.4.5"
+SCRIPT_VERSION="1.4.6"
 SYSCTL_CONF="/etc/sysctl.d/99-bbr-kcc.conf"
 MODULES_LOAD_CONF="/etc/modules-load.d/99-bbr-kcc.conf"
 BOOT_APPLY_SCRIPT="/usr/local/sbin/bbr-kcc-apply"
@@ -1052,6 +1052,26 @@ format_kcc_gain() {
     awk -v num="$num" -v den="$den" 'BEGIN { printf "%.2fx", num / den }'
 }
 
+format_kcc_injection_percent() {
+    local num=$1
+    local den=$2
+
+    if ! is_positive_integer "$num" || ! is_positive_integer "$den"; then
+        echo "未知"
+        return 0
+    fi
+
+    awk -v num="$num" -v den="$den" 'BEGIN { printf "%.1f%%", (num / den / 2.885) * 100 }'
+}
+
+format_kcc_enabled_label() {
+    if [ "$1" = "1" ]; then
+        echo "启用"
+    else
+        echo "禁用"
+    fi
+}
+
 
 read_sysctl_conf_value() {
     local key=$1
@@ -1112,17 +1132,18 @@ get_kcc_effective_value() {
 }
 
 show_kcc_tuning_status() {
-    local kf_enable discount_num discount_den kfsm
+    local kf_enable discount_num discount_den kfsm inactive_note
 
     kf_enable=$(get_kcc_effective_value kcc_kf_enable "$KCC_KF_ENABLE")
     discount_num=$(get_kcc_effective_value kcc_kf_discount_num "$KCC_KF_DISCOUNT_NUM")
     discount_den=$(get_kcc_effective_value kcc_kf_discount_den "$KCC_KF_DISCOUNT_DEN")
     kfsm=$(get_kcc_effective_value kcc_kf_steady_mode "$KCC_KF_STEADY_MODE")
+    [ "$kf_enable" = "1" ] || inactive_note="（未生效）"
 
     echo "====== KCC 参数 ======"
-    echo "kf_enable $kf_enable"
-    echo "kf_discount $discount_num/$discount_den = $(format_kcc_gain "$discount_num" "$discount_den")"
-    echo "kf_steady_mode $kfsm"
+    echo "KF 注入: $(format_kcc_enabled_label "$kf_enable")"
+    echo "稳态峰值: $(format_kcc_enabled_label "$kfsm")$inactive_note"
+    echo "甜点速度: $discount_num/$discount_den = $(format_kcc_gain "$discount_num" "$discount_den")；预计初始注入 fair-share × $(format_kcc_injection_percent "$discount_num" "$discount_den")$inactive_note"
     echo "====================="
 }
 
@@ -1441,17 +1462,19 @@ kcc_tuning_menu() {
         echo "====== 当前状态与 KCC 参数调优 ======"
         echo
         echo "说明:"
-        echo "  kf_enable       全局 Kalman BDP 注入开关，上游默认关闭。"
-        echo "  kf_discount     新连接甜点速度比例，上游默认 50/100。"
-        echo "  kf_steady_mode  新连接用全局 Kalman 历史峰值估算初始带宽。"
+        echo "  kf_enable       KF 全局注入总开关，上游默认关闭。"
+        echo "  kf_steady_mode  仅 KF 注入启用后生效；新连接使用历史峰值而非实时估计。"
+        echo "  kf_discount     仅 KF 注入启用后生效；实际初始注入约为 discount / high_gain。"
         echo
         show_kcc_runtime_overview
         echo
         echo "1. KF 全局注入：当前 $kf_enable_label"
-        echo "2. 甜点速度：恢复默认 kf_discount = $KCC_KF_DISCOUNT_NUM/$KCC_KF_DISCOUNT_DEN"
-        echo "3. KF 稳态峰值模式：当前 $kf_label"
+        echo "2. KF 稳态峰值模式：当前 $kf_label（仅 KF 注入启用后生效；切换为启用时会同步启用 KF 注入）"
+        echo "3. 甜点速度：保守 35/100，预计初始注入 fair-share × $(format_kcc_injection_percent 35 100)（会同步启用 KF 注入）"
+        echo "4. 甜点速度：默认 50/100，预计初始注入 fair-share × $(format_kcc_injection_percent 50 100)（会同步启用 KF 注入）"
+        echo "5. 甜点速度：激进 75/100，预计初始注入 fair-share × $(format_kcc_injection_percent 75 100)（会同步启用 KF 注入）"
         echo "0. 返回主菜单"
-        read -p "请输入选择 [0-3]，回车刷新: " choice
+        read -p "请输入选择 [0-5]，回车刷新: " choice
 
         case $choice in
             "")
@@ -1460,10 +1483,20 @@ kcc_tuning_menu() {
                 apply_kcc_tuning "$kf_enable_new" "$discount_num" "$discount_den" "$kf_current"
                 ;;
             2)
-                apply_kcc_tuning "$kf_enable" "$KCC_KF_DISCOUNT_NUM" "$KCC_KF_DISCOUNT_DEN" "$kf_current"
+                if [ "$kf_new" = "1" ]; then
+                    apply_kcc_tuning 1 "$discount_num" "$discount_den" "$kf_new"
+                else
+                    apply_kcc_tuning "$kf_enable" "$discount_num" "$discount_den" "$kf_new"
+                fi
                 ;;
             3)
-                apply_kcc_tuning "$kf_enable" "$discount_num" "$discount_den" "$kf_new"
+                apply_kcc_tuning 1 35 100 "$kf_current"
+                ;;
+            4)
+                apply_kcc_tuning 1 50 100 "$kf_current"
+                ;;
+            5)
+                apply_kcc_tuning 1 75 100 "$kf_current"
                 ;;
             0)
                 return 0
