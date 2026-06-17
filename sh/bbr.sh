@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.4.6"
+SCRIPT_VERSION="1.4.7"
 SYSCTL_CONF="/etc/sysctl.d/99-bbr-kcc.conf"
 MODULES_LOAD_CONF="/etc/modules-load.d/99-bbr-kcc.conf"
 BOOT_APPLY_SCRIPT="/usr/local/sbin/bbr-kcc-apply"
@@ -14,7 +14,7 @@ KCC_PATCH_DIR="$KCC_SRC_DIR/google/patch"
 
 qdisc="cake"
 congestion_control="kcc"
-KCC_KF_ENABLE=0
+KCC_KF_ENABLE=1
 KCC_KF_DISCOUNT_NUM=50
 KCC_KF_DISCOUNT_DEN=100
 KCC_KF_STEADY_MODE=0
@@ -1462,7 +1462,7 @@ kcc_tuning_menu() {
         echo "====== 当前状态与 KCC 参数调优 ======"
         echo
         echo "说明:"
-        echo "  kf_enable       KF 全局注入总开关，上游默认关闭。"
+        echo "  kf_enable       KF 全局注入总开关；脚本应用 KCC 方案时默认启用。"
         echo "  kf_steady_mode  仅 KF 注入启用后生效；新连接使用历史峰值而非实时估计。"
         echo "  kf_discount     仅 KF 注入启用后生效；实际初始注入约为 discount / high_gain。"
         echo
@@ -1579,6 +1579,9 @@ generate_sysctl_conf() {
     kf_discount_num=$(get_kcc_effective_value kcc_kf_discount_num "$KCC_KF_DISCOUNT_NUM")
     kf_discount_den=$(get_kcc_effective_value kcc_kf_discount_den "$KCC_KF_DISCOUNT_DEN")
     kcc_kf_steady=$(get_kcc_effective_value kcc_kf_steady_mode "$KCC_KF_STEADY_MODE")
+    if [ "$congestion_control" = "kcc" ]; then
+        kf_enable=1
+    fi
 
     cat > "$SYSCTL_CONF" << EOF
 # $SYSCTL_CONF - BBR/KCC 系统变量配置文件
@@ -1717,7 +1720,7 @@ menu() {
         echo "1. 安装/更新 KCC 模块"
         echo "2. 安装/更新 BBR1 模块"
         echo "3. 应用优化方案"
-        echo "4. KCC 参数调优"
+        echo "4. KCC 参数调优（可选）"
         echo "5. 查看详细状态"
         echo "6. 恢复默认 BBR (bbr + fq)"
         echo "7. 重启系统"
