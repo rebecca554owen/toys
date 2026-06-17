@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.4.9"
+SCRIPT_VERSION="1.5.0"
 SYSCTL_CONF="/etc/sysctl.d/99-bbr-kcc.conf"
 LEGACY_SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 MODULES_LOAD_CONF="/etc/modules-load.d/99-bbr-kcc.conf"
@@ -1481,13 +1481,13 @@ kcc_tuning_menu() {
         echo
         echo "说明:"
         echo "  kf_enable       KF 全局注入总开关；脚本应用 KCC 方案时默认启用。"
-        echo "  kf_steady_mode  仅 KF 注入启用后生效；新连接使用历史峰值而非实时估计。"
+        echo "  kf_steady_mode  让新连接复用已学习到的带宽峰值，减少冷启动慢热；链路稳定、频繁新建连接时更适合。"
         echo "  kf_discount     仅 KF 注入启用后生效；实际初始注入约为 discount / high_gain。"
         echo
         show_kcc_runtime_overview
         echo
         echo "1. KF 全局注入：当前 $kf_enable_label"
-        echo "2. KF 稳态峰值模式：当前 $kf_label（依赖 KF 注入；若 KF 注入已关闭，启用时会自动打开）"
+        echo "2. KF 稳态峰值模式：当前 $kf_label（复用历史峰值估计，让新连接更快进入甜点速度）"
         echo "3. 甜点速度：保守 35/100，预计初始注入 fair-share × $(format_kcc_injection_percent 35 100)（会同步启用 KF 注入）"
         echo "4. 甜点速度：默认 50/100，预计初始注入 fair-share × $(format_kcc_injection_percent 50 100)（会同步启用 KF 注入）"
         echo "5. 甜点速度：激进 75/100，预计初始注入 fair-share × $(format_kcc_injection_percent 75 100)（会同步启用 KF 注入）"
