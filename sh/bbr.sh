@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.5.0"
+SCRIPT_VERSION="1.5.1"
 SYSCTL_CONF="/etc/sysctl.d/99-bbr-kcc.conf"
 LEGACY_SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 MODULES_LOAD_CONF="/etc/modules-load.d/99-bbr-kcc.conf"
@@ -758,14 +758,24 @@ install_bbr_module() {
     else
         loaded_srcversion=$(get_running_module_srcversion tcp_bbr1)
         installed_srcversion=$(get_installed_module_srcversion tcp_bbr1)
-        if [ -n "$installed_srcversion" ] && [ "$loaded_srcversion" = "$installed_srcversion" ]; then
+        installed_module=$(get_installed_module_file tcp_bbr1)
+        if [ -z "$installed_module" ] || [ ! -f "$installed_module" ]; then
+            echo "源码无变化，但当前内核未安装 tcp_bbr1 模块，开始编译补丁 BBR..."
+            build_kernel_module "$KCC_PATCH_DIR" || return 1
+            install_bbr_module_file || return 1
+        elif [ ! -f "$KCC_PATCH_DIR/tcp_bbr1.ko" ]; then
+            echo "源码无变化，但源码目录缺少已编译模块，开始重新编译补丁 BBR..."
+            build_kernel_module "$KCC_PATCH_DIR" || return 1
+            install_bbr_module_file || return 1
+        elif [ -n "$installed_srcversion" ] && [ "$loaded_srcversion" = "$installed_srcversion" ]; then
             echo "源码无变化，运行中版本已是最新 (src:$loaded_srcversion)。"
             ensure_module_autoload tcp_bbr1 || return 1
             ensure_boot_apply_service || return 1
             persist_scheme_if_module_selected bbr1 "$restore_congestion_control" "$restore_qdisc" || return 1
             return 0
+        else
+            echo "源码无变化，磁盘已有更新版本，尝试热替换..."
         fi
-        echo "源码无变化，磁盘已有更新版本，尝试热替换..."
     fi
 
     echo "加载 tcp_bbr1 模块..."
@@ -792,7 +802,7 @@ install_bbr_module() {
 }
 
 install_kcc_module() {
-    local restore_congestion_control restore_qdisc reload_status loaded_srcversion installed_srcversion
+    local restore_congestion_control restore_qdisc reload_status loaded_srcversion installed_srcversion installed_module
 
     require_linux || return 1
     require_root || return 1
@@ -813,14 +823,26 @@ install_kcc_module() {
     else
         loaded_srcversion=$(get_running_module_srcversion tcp_kcc)
         installed_srcversion=$(get_installed_module_srcversion tcp_kcc)
-        if [ -n "$installed_srcversion" ] && [ "$loaded_srcversion" = "$installed_srcversion" ]; then
+        installed_module=$(get_installed_module_file tcp_kcc)
+        if [ -z "$installed_module" ] || [ ! -f "$installed_module" ]; then
+            echo "源码无变化，但当前内核未安装 tcp_kcc 模块，开始编译 KCC..."
+            build_kernel_module "$KCC_SRC_DIR" || return 1
+            echo "安装 KCC 模块..."
+            install_kcc_module_file || return 1
+        elif [ ! -f "$KCC_SRC_DIR/tcp_kcc.ko" ]; then
+            echo "源码无变化，但源码目录缺少已编译模块，开始重新编译 KCC..."
+            build_kernel_module "$KCC_SRC_DIR" || return 1
+            echo "安装 KCC 模块..."
+            install_kcc_module_file || return 1
+        elif [ -n "$installed_srcversion" ] && [ "$loaded_srcversion" = "$installed_srcversion" ]; then
             echo "源码无变化，运行中版本已是最新 (src:$loaded_srcversion)。"
             ensure_module_autoload tcp_kcc || return 1
             ensure_boot_apply_service || return 1
             persist_scheme_if_module_selected kcc "$restore_congestion_control" "$restore_qdisc" || return 1
             return 0
+        else
+            echo "源码无变化，磁盘已有更新版本，尝试热替换..."
         fi
-        echo "源码无变化，磁盘已有更新版本，尝试热替换..."
     fi
 
     echo "加载 tcp_kcc 模块..."
