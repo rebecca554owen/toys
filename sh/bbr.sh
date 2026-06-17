@@ -2,8 +2,9 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.4.8"
+SCRIPT_VERSION="1.4.9"
 SYSCTL_CONF="/etc/sysctl.d/99-bbr-kcc.conf"
+LEGACY_SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 MODULES_LOAD_CONF="/etc/modules-load.d/99-bbr-kcc.conf"
 BOOT_APPLY_SCRIPT="/usr/local/sbin/bbr-kcc-apply"
 BOOT_APPLY_SERVICE="/etc/systemd/system/bbr-kcc-apply.service"
@@ -145,6 +146,21 @@ show_current_scheme() {
     echo "开机加载: tcp_kcc=$(get_modules_load_status tcp_kcc), tcp_bbr1=$(get_modules_load_status tcp_bbr1), 启动应用=$(get_boot_apply_status)"
     show_tcp_congestion_socket_status "$socket_mode"
     echo "====================="
+}
+
+remove_legacy_sysctl_overrides() {
+    local conf disabled_file
+
+    for conf in "$LEGACY_SYSCTL_CONF" /etc/sysctl.d/00-bbr-optimization.conf; do
+        [ -e "$conf" ] || continue
+        disabled_file="$conf.disabled-by-bbr-kcc"
+        if [ -e "$disabled_file" ]; then
+            disabled_file="$conf.disabled-by-bbr-kcc.$(date +%Y%m%d%H%M%S)"
+        fi
+        mv "$conf" "$disabled_file" || {
+            echo "警告：无法清理旧 sysctl 残留: $conf"
+        }
+    done
 }
 
 install_packages() {
@@ -667,6 +683,7 @@ fi
 
 sysctl -q -w "net.core.default_qdisc=\$qdisc" || true
 sysctl -q -w "net.ipv4.tcp_congestion_control=\$cc" || true
+sysctl -e -q -p "\$SYSCTL_CONF" || true
 EOF
     chmod 0755 "$BOOT_APPLY_SCRIPT" || return 1
 
@@ -884,7 +901,7 @@ ensure_kcc_ready() {
         return 0
     fi
 
-    echo "KCC 未安装或未加载，无法直接应用 kcc + fq。"
+    echo "KCC 未安装或未加载，无法直接应用 KCC 方案。"
     read -p "是否立即编译/安装/加载 KCC 模块？[Y/n]: " install_now
     case $install_now in
         ""|y|Y)
@@ -1470,7 +1487,7 @@ kcc_tuning_menu() {
         show_kcc_runtime_overview
         echo
         echo "1. KF 全局注入：当前 $kf_enable_label"
-        echo "2. KF 稳态峰值模式：当前 $kf_label（仅 KF 注入启用后生效；切换为启用时会同步启用 KF 注入）"
+        echo "2. KF 稳态峰值模式：当前 $kf_label（依赖 KF 注入；若 KF 注入已关闭，启用时会自动打开）"
         echo "3. 甜点速度：保守 35/100，预计初始注入 fair-share × $(format_kcc_injection_percent 35 100)（会同步启用 KF 注入）"
         echo "4. 甜点速度：默认 50/100，预计初始注入 fair-share × $(format_kcc_injection_percent 50 100)（会同步启用 KF 注入）"
         echo "5. 甜点速度：激进 75/100，预计初始注入 fair-share × $(format_kcc_injection_percent 75 100)（会同步启用 KF 注入）"
@@ -1693,6 +1710,7 @@ net.kcc.kcc_kf_discount_num = $kf_discount_num
 net.kcc.kcc_kf_discount_den = $kf_discount_den
 net.kcc.kcc_kf_steady_mode = $kcc_kf_steady
 EOF
+    remove_legacy_sysctl_overrides
     archive_conflicting_sysctl_configs
     echo "配置已写入 $SYSCTL_CONF"
     ensure_boot_apply_service || {
