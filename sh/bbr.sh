@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.5.2"
+SCRIPT_VERSION="1.5.3"
 SYSCTL_CONF="/etc/sysctl.d/99-bbr-kcc.conf"
 LEGACY_SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 MODULES_LOAD_CONF="/etc/modules-load.d/99-bbr-kcc.conf"
@@ -18,8 +18,8 @@ congestion_control="kcc"
 KCC_KF_ENABLE=1
 KCC_KF_DISCOUNT_NUM=50
 KCC_KF_DISCOUNT_DEN=100
-KCC_KF_STEADY_MODE=0
-KCC_RTT_MODE=1
+KCC_KF_STEADY_MODE=1
+KCC_RTT_MODE=0
 
 get_sysctl_value() {
     sysctl -n "$1" 2>/dev/null || echo "未知"
@@ -1570,8 +1570,8 @@ kcc_tuning_menu() {
         echo "3. 甜点速度：保守 35/100，预计初始注入 fair-share × $(format_kcc_injection_percent 35 100)（会同步启用 KF 注入）"
         echo "4. 甜点速度：默认 50/100，预计初始注入 fair-share × $(format_kcc_injection_percent 50 100)（会同步启用 KF 注入）"
         echo "5. 甜点速度：激进 75/100，预计初始注入 fair-share × $(format_kcc_injection_percent 75 100)（会同步启用 KF 注入）"
-        echo "6. RTT 模式：FILTER=1 通用稳定（默认，适合移动/高噪声/路径突变）"
-        echo "7. RTT 模式：MIN=0 有线优化（适合光纤/家庭宽带/商宽，追求低延迟和高利用率）"
+        echo "6. RTT 模式：FILTER=1 通用稳定（适合移动/高噪声/路径突变）"
+        echo "7. RTT 模式：MIN=0 有线优化（脚本默认，适合光纤/家庭宽带/商宽，追求低延迟和高利用率）"
         echo "0. 返回主菜单"
         read -p "请输入选择 [0-7]，回车刷新: " choice
 
@@ -1687,10 +1687,8 @@ generate_sysctl_conf() {
     kcc_rtt_mode=$(get_kcc_effective_value kcc_rtt_mode "$KCC_RTT_MODE")
     if [ "$congestion_control" = "kcc" ]; then
         kf_enable=1
-        case "$kcc_rtt_mode" in
-            0|1) ;;
-            *) kcc_rtt_mode=$KCC_RTT_MODE ;;
-        esac
+        kcc_kf_steady=$KCC_KF_STEADY_MODE
+        kcc_rtt_mode=$KCC_RTT_MODE
     fi
 
     cat > "$SYSCTL_CONF" << EOF
