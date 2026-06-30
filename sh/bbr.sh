@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.5.3"
+SCRIPT_VERSION="1.5.4"
 SYSCTL_CONF="/etc/sysctl.d/99-bbr-kcc.conf"
 LEGACY_SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 MODULES_LOAD_CONF="/etc/modules-load.d/99-bbr-kcc.conf"
@@ -1116,13 +1116,10 @@ format_kcc_enabled_label() {
 format_kcc_rtt_mode_label() {
     case "$1" in
         0)
-            echo "MIN=0 有线光纤/家庭宽带/商宽优化，低延迟高利用率"
+            echo "FILTER=0 通用稳定，KCC 默认"
             ;;
         1)
-            echo "FILTER=1 通用稳定，抗路径突变"
-            ;;
-        2)
-            echo "BBR-pure=2 实验/特定场景，不建议日常使用"
+            echo "BBR=1 传统 min_rtt 窗口，轻载/单流特定场景"
             ;;
         *)
             echo "未知=$1"
@@ -1561,7 +1558,7 @@ kcc_tuning_menu() {
         echo "  kf_enable       KF 全局注入总开关；脚本应用 KCC 方案时默认启用。"
         echo "  kf_steady_mode  让新连接复用已学习到的带宽峰值，减少冷启动慢热；链路稳定、频繁新建连接时更适合。"
         echo "  kf_discount     仅 KF 注入启用后生效；实际初始注入约为 discount / high_gain。"
-        echo "  kcc_rtt_mode    RTT 建模策略：FILTER 通用稳定；MIN 更适合有线光纤、家庭宽带、商用宽带。"
+        echo "  kcc_rtt_mode    RTT 建模策略：FILTER 是 KCC 默认；BBR 模式使用传统 min_rtt 窗口，仅适合特定轻载/单流场景。"
         echo
         show_kcc_runtime_overview
         echo
@@ -1570,8 +1567,8 @@ kcc_tuning_menu() {
         echo "3. 甜点速度：保守 35/100，预计初始注入 fair-share × $(format_kcc_injection_percent 35 100)（会同步启用 KF 注入）"
         echo "4. 甜点速度：默认 50/100，预计初始注入 fair-share × $(format_kcc_injection_percent 50 100)（会同步启用 KF 注入）"
         echo "5. 甜点速度：激进 75/100，预计初始注入 fair-share × $(format_kcc_injection_percent 75 100)（会同步启用 KF 注入）"
-        echo "6. RTT 模式：FILTER=1 通用稳定（适合移动/高噪声/路径突变）"
-        echo "7. RTT 模式：MIN=0 有线优化（脚本默认，适合光纤/家庭宽带/商宽，追求低延迟和高利用率）"
+        echo "6. RTT 模式：FILTER=0 通用稳定（脚本默认，KCC 默认）"
+        echo "7. RTT 模式：BBR=1 传统 min_rtt 窗口（轻载/单流特定场景）"
         echo "0. 返回主菜单"
         read -p "请输入选择 [0-7]，回车刷新: " choice
 
@@ -1598,10 +1595,10 @@ kcc_tuning_menu() {
                 apply_kcc_tuning 1 75 100 "$kf_current" "$rtt_write"
                 ;;
             6)
-                apply_kcc_tuning "$kf_enable" "$discount_num" "$discount_den" "$kf_current" 1
+                apply_kcc_tuning "$kf_enable" "$discount_num" "$discount_den" "$kf_current" 0
                 ;;
             7)
-                apply_kcc_tuning "$kf_enable" "$discount_num" "$discount_den" "$kf_current" 0
+                apply_kcc_tuning "$kf_enable" "$discount_num" "$discount_den" "$kf_current" 1
                 ;;
             0)
                 return 0
