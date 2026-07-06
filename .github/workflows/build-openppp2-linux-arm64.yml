@@ -31,7 +31,7 @@ jobs:
       with:
         repository: rebecca554owen/openppp2
         path: openppp2
-        ref: inet6
+        ref: dev
 
     - name: Install Dependencies
       run: |
