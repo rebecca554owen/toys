@@ -58,7 +58,8 @@ jobs:
         run: |
           set -euo pipefail
           cd "${{ runner.temp }}"
-          curl -L --fail -o android-ndk-r29-darwin.zip \
+          curl --http1.1 -L --fail --retry 5 --retry-all-errors --retry-delay 10 \
+            -o android-ndk-r29-darwin.zip \
             https://dl.google.com/android/repository/android-ndk-r29-darwin.zip
           unzip -q android-ndk-r29-darwin.zip
           rm android-ndk-r29-darwin.zip
