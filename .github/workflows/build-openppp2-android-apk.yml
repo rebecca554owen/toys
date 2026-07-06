@@ -44,7 +44,7 @@ jobs:
         with:
           repository: rebecca554owen/openppp2
           path: openppp2
-          ref: inet6
+          ref: dev
 
       - name: Cache Android NDK
         id: cache-android-ndk
@@ -334,7 +334,7 @@ jobs:
         with:
           repository: rebecca554owen/openppp2
           path: openppp2
-          ref: inet6
+          ref: dev
 
       - name: Download macOS .so artifacts
         uses: actions/download-artifact@v8
