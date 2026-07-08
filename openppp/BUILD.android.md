@@ -12,7 +12,7 @@ description: 在 macOS 上本地编译并打包 openppp2 APK，以及 GitHub Act
 - Flutter 3.44（stable，路径 `~/flutter`）
 - Android Studio（自带 JDK 21 和 SDK 管理）
 - Android SDK：`platform-tools`、`platforms;android-36`、`build-tools;36.0.0`
-- Android NDK 29.0.14206865（Gradle 自动发现，无需 `ndk.dir`）
+- Android NDK 29.0.14206865（推荐；性能和 CI/release 对齐；Gradle 自动发现，无需 `ndk.dir`）
 - Ninja（`brew install ninja`）
 
 ## 2. 源码仓库位置
@@ -123,9 +123,20 @@ APK 内包含：
 - `lib/arm64-v8a/libopenppp2.so`（本地编译，~19 MB 未压缩）
 - `lib/arm64-v8a/libflutter.so`
 
-## 8. Clean Build 耗时参考
+## 8. Native `.so` NDK 选择和耗时参考
 
-完整重编（含 CMake 配置 + C++ 编译/链接 + APK 打包）约 **7~8 秒**：
+本地 Apple Silicon 对 `arm64-v8a` 做过一次干净 native `.so` 编译对比（含 CMake 配置、C++ 编译和链接，不含 Boost/OpenSSL 从源码重建）：
+
+| NDK | 结果 | 耗时 | `libopenppp2.so` 大小 | 建议 |
+| --- | --- | ---: | ---: | --- |
+| `26.1.10909125` | 成功 | 5 分 04 秒 | 24.4 MB | 可用于本地快速验证 |
+| `29.0.14206865` | 成功 | 7 分 16 秒 | 28.8 MB | 推荐使用；性能表现和 CI/release 对齐 |
+
+结论：推荐使用 NDK r29，和 GitHub Actions Android workflow 保持一致；NDK r26 可作为本地快速验证备选。
+
+## 9. APK Clean Build 耗时参考
+
+完整 APK 重编（Flutter/Gradle 打包，使用已生成的 `jniLibs`）约 **20 秒**：
 
 ```bash
 cd ~/Documents/GitHub/openppp2/android/android
@@ -134,7 +145,7 @@ cd ..
 ~/flutter/bin/flutter build apk --release
 ```
 
-## 9. 其他 ABI（可选）
+## 10. 其他 ABI（可选）
 
 若需 armeabi-v7a / x86 / x86_64，可从 `openppp2-android` 复制 `.so` 到对应 `jniLibs/` 目录，但 arm64-v8a 必须本地编译。
 
@@ -149,11 +160,11 @@ for abi in armeabi-v7a x86 x86_64; do
 done
 ```
 
-## 10. 关键说明
+## 11. 关键说明
 
 - **构建目录：** 用 `build-android/`（`flutter build` 默认），与 macOS 的 `build-macos/` 分开。
 - **构建目标：** `openppp2`（不是 `ppp`）。
 - **OpenSSL 目录：** Android 使用 `third-party/openssl-arm64/`，不要覆盖 macOS 的 OpenSSL 目录。
 - **jemalloc：** Android 构建不需要（CMakeLists.txt 只在 Windows 分支检查 jemalloc）。
-- **NDK 版本：** CI 使用 r29（`android-ndk-r29-linux.zip`）；本地建议使用 29.0.14206865。
+- **NDK 版本：** 推荐使用 r29（`android-ndk-r29-darwin.zip`），和 CI/release 保持一致；r26 可作为本地快速验证备选。
 - **C++ 标准：** Android CMake 使用 C++17，并为 Boost 1.86.0 添加 `_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION`。
