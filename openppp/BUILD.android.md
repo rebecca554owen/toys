@@ -42,54 +42,46 @@ Android 构建实际链接的产物：
 
 > `.gitignore` 已忽略 `/third-party`，该生成目录不会被 git 跟踪。
 
-## 4. 本地依赖准备
+## 4. 依赖生成与 `.so` 编译（一条命令完成）
 
-Android 依赖（Boost / OpenSSL）放在 `openppp2/third-party/`。当前本地已预编译四个 ABI，但**目录命名规则本身也应记录清楚**，否则后面很难手动修复或重建。
+`toys/openppp/build-android-local.sh` 会自动完成全部工作：检测依赖是否存在 → 缺了就从源码编译 Boost / OpenSSL → 编译并链接 `libopenppp2.so`。
+
+### 命令
+
+```bash
+cd ~/Documents/GitHub/toys/openppp
+NDK_ROOT=~/Library/Android/sdk/ndk/29.0.14206865 \
+THIRD_PARTY_DIR=~/Documents/GitHub/openppp2/third-party \
+bash ./build-android-local.sh arm64      # 单 ABI
+# 或
+bash ./build-android-local.sh all         # 全部 4 个 ABI
+```
+
+> 注意：优先使用 `toys/openppp/build-android-local.sh`。`openppp2/build-android-local.sh` 是上游自带的简化脚本，缺少依赖自动编译和 `OPENSSL_ANDROID_ROOT` 参数传递。
 
 ### 目录命名规则
 
-| 输入 ABI 参数 | Android ABI 目录名 | Boost 输出目录 | OpenSSL 输出目录 |
+| 输入参数 | Android ABI | Boost 目录 | OpenSSL 目录 |
 |---|---|---|---|
 | `arm64` | `arm64-v8a` | `boost/arm64-v8a/` | `openssl-arm64/` |
 | `arm` | `armeabi-v7a` | `boost/armeabi-v7a/` | `openssl-armeabi-v7a/` |
 | `x86` | `x86` | `boost/x86/` | `openssl-x86/` |
 | `x64` | `x86_64` | `boost/x86_64/` | `openssl-x86_64/` |
 
-源码缓存目录：
-- `third-party/boost-src/`
-- `third-party/openssl-src/`
+源码缓存：`third-party/boost-src/`、`third-party/openssl-src/`
 
-归档缓存目录：
-- `third-party/boost_1_86_0.tar.bz2`
-- `third-party/openssl-4.0.0.tar.gz`
+### 脚本的依赖检测逻辑
 
-### 现有产物（已补齐）
+- **Boost**：检查 6 个 `.a`（system / coroutine / thread / context / regex / filesystem）是否都存在，且 `libboost_context.a` 含 `make_fcontext` / `jump_fcontext` / `ontop_fcontext` 符号。全通过则跳过，否则自动重建。
+- **OpenSSL**：检查 `lib/libssl.a` 和 `lib/libcrypto.a` 是否都存在。存在则跳过，否则自动重建。
+- **源码**：Boost 检查 `version.hpp` 版本号；OpenSSL 检查 `Configure` 是否存在。缺了自动下载。
 
-| ABI | Boost | OpenSSL |
-|---|---|---|
-| arm64-v8a | `boost/arm64-v8a/libboost_*.a` | `openssl-arm64/` |
-| armeabi-v7a | `boost/armeabi-v7a/libboost_*.a` | `openssl-armeabi-v7a/` |
-| x86 | `boost/x86/libboost_*.a` | `openssl-x86/` |
-| x86_64 | `boost/x86_64/libboost_*.a` | `openssl-x86_64/` |
+### 产物路径
 
-### 依赖重新生成（实测说明）
-
-已经实测：把以下目录临时改名后，脚本会自动重新解压源码并重建 ABI 依赖：
-- `boost-src/`
-- `openssl-src/`
-- `boost/arm64-v8a/`
-- `openssl-arm64/`
-
-用于**重建依赖**的脚本是：
-
-```bash
-cd ~/Documents/GitHub/toys/openppp
-NDK_ROOT=~/Library/Android/sdk/ndk/29.0.14206865 \
-THIRD_PARTY_DIR=~/Documents/GitHub/openppp2/third-party \
-bash ./build-android-local.sh arm64
-```
-
-> 注意：这条脚本当前可以可靠地**重建依赖**；但在现有上游代码状态下，脚本末尾的一体化 `.so` 链接步骤可能仍会被 `openppp2/android/CMakeLists.txt` 的 OpenSSL 路径选择影响。依赖补全/重建本身没有问题。
+- `openppp2/bin/android/arm64-v8a/libopenppp2.so`
+- `openppp2/bin/android/armeabi-v7a/libopenppp2.so`
+- `openppp2/bin/android/x86/libopenppp2.so`
+- `openppp2/bin/android/x86_64/libopenppp2.so`
 
 ## 5. 签名材料
 
@@ -110,43 +102,6 @@ ln -sf "$KEY/key.properties" "$OPENPPP2/android/android/keystore/yav-release-key
 # keyAlias=...
 # keyPassword=...
 ```
-
-## 6. 生成 `libopenppp2.so`
-
-前提：`openppp2/third-party/` 已具备对应 ABI 的 Boost / OpenSSL 产物。
-
-推荐使用 `toys/openppp/build-android-local.sh`（功能更完整，自动处理依赖+编译+链接）：
-
-```bash
-cd ~/Documents/GitHub/toys/openppp
-NDK_ROOT=~/Library/Android/sdk/ndk/29.0.14206865 \
-THIRD_PARTY_DIR=~/Documents/GitHub/openppp2/third-party \
-bash ./build-android-local.sh arm64
-```
-
-若要一次生成 4 个 ABI：
-
-```bash
-cd ~/Documents/GitHub/toys/openppp
-NDK_ROOT=~/Library/Android/sdk/ndk/29.0.14206865 \
-THIRD_PARTY_DIR=~/Documents/GitHub/openppp2/third-party \
-bash ./build-android-local.sh all
-```
-
-> 注意：`openppp2/build-android-local.sh` 是上游自带的简化脚本，缺少 OpenSSL/Boost 自动编译和 `OPENSSL_ANDROID_ROOT` 参数传递，推荐优先使用 `toys/openppp/build-android-local.sh`。
-
-arm64 产物路径：`~/Documents/GitHub/openppp2/bin/android/arm64-v8a/libopenppp2.so`
-
-4 ABI 产物路径：
-- `bin/android/arm64-v8a/libopenppp2.so`
-- `bin/android/armeabi-v7a/libopenppp2.so`
-- `bin/android/x86/libopenppp2.so`
-- `bin/android/x86_64/libopenppp2.so`
-
-CMake 配置参数（关键）：
-- `-D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION`
-- `-DTHIRD_PARTY_LIBRARY_DIR=~/Documents/GitHub/openppp2/third-party`
-- `-DBOOST_ANDROID_INCLUDE_DIR`、`-DBOOST_ANDROID_LIB_DIR`、`-DOPENSSL_ANDROID_ROOT` 指向生成的 Android 依赖
 
 ## 7. 编译 APK
 
