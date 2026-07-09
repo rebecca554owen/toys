@@ -9,7 +9,7 @@ description: 在 macOS 上本地编译并打包 openppp2 APK，以及 GitHub Act
 
 ## 1. 环境要求
 
-- Flutter 3.44（stable，路径 `~/flutter`）
+- Flutter 3.44（stable，brew 管理：`/opt/homebrew/bin/flutter`）
 - Android Studio（自带 JDK 21 和 SDK 管理）
 - Android SDK：`platform-tools`、`platforms;android-36`、`build-tools;36.0.0`
 - Android NDK 29.0.14206865（推荐；性能和 CI/release 对齐；Gradle 自动发现，无需 `ndk.dir`）
@@ -44,29 +44,18 @@ Android 构建实际链接的产物：
 
 ## 4. 本地依赖准备
 
-`build-android-local.sh` 会自动从源码下载并编译 Boost 和 OpenSSL，无需手动 clone。
+Android 依赖（Boost / OpenSSL）已预编译到 `openppp2/third-party/`，四个 ABI 齐全：
 
-本地脚本默认路径：
-- Boost 源码缓存：`third-party/boost-src/`
-- OpenSSL 源码缓存：`third-party/openssl-src/`
-- 产物：`third-party/boost/arm64-v8a/` 和 `third-party/openssl-arm64/`
+| ABI | Boost | OpenSSL |
+|---|---|---|
+| arm64-v8a | `boost/arm64-v8a/libboost_*.a` | `openssl-arm64/` |
+| armeabi-v7a | `boost/armeabi-v7a/libboost_*.a` | `openssl-armeabi-v7a/` |
+| x86 | `boost/x86/libboost_*.a` | `openssl-x86/` |
+| x86_64 | `boost/x86_64/libboost_*.a` | `openssl-x86_64/` |
 
-直接运行：
+源码缓存：`third-party/boost-src/` 和 `third-party/openssl-src/`。
 
-```bash
-cd ~/Documents/GitHub/toys/openppp
-./build-android-local.sh arm64
-```
-
-如需调整版本或路径，通过环境变量：
-
-```bash
-NDK_ROOT=~/Library/Android/sdk/ndk/29.0.14206865 \
-THIRD_PARTY_DIR=~/Documents/GitHub/openppp2/third-party \
-BOOST_VERSION=1.86.0 \
-OPENSSL_VERSION=4.0.0 \
-./build-android-local.sh arm64
-```
+如需重新编译某个 ABI 的 Boost，参考 `toys` 仓库 CI workflow 中的 Build Boost 步骤。
 
 ## 5. 签名材料
 
@@ -88,30 +77,59 @@ ln -sf "$KEY/key.properties" "$OPENPPP2/android/android/keystore/yav-release-key
 # keyPassword=...
 ```
 
-## 6. 生成 `libopenppp2.so`（arm64-v8a）
+## 6. 生成 `libopenppp2.so`
 
-前提：`third-party/boost/arm64-v8a/` 和 `third-party/openssl-arm64/` 已准备好；如果不存在，本地脚本会自动生成。
+前提：`openppp2/third-party/` 已具备对应 ABI 的 Boost / OpenSSL 产物。
 
-本地快速构建脚本：`toys/openppp/build-android-local.sh`
+推荐直接在 `openppp2` 仓库里运行本地脚本：
 
 ```bash
-cd ~/Documents/GitHub/toys/openppp
-./build-android-local.sh arm64
+cd ~/Documents/GitHub/openppp2
+NDK_ROOT=~/Library/Android/sdk/ndk/29.0.14206865 \
+THIRD_PARTY_DIR=~/Documents/GitHub/openppp2/third-party \
+bash ./build-android-local.sh arm64
 ```
 
-产物路径：`~/Documents/GitHub/openppp2/android/build/libopenppp2.so`
+若要一次生成 4 个 ABI：
+
+```bash
+cd ~/Documents/GitHub/openppp2
+NDK_ROOT=~/Library/Android/sdk/ndk/29.0.14206865 \
+THIRD_PARTY_DIR=~/Documents/GitHub/openppp2/third-party \
+bash ./build-android-local.sh all
+```
+
+arm64 产物路径：`~/Documents/GitHub/openppp2/bin/android/arm64-v8a/libopenppp2.so`
+
+4 ABI 产物路径：
+- `bin/android/arm64-v8a/libopenppp2.so`
+- `bin/android/armeabi-v7a/libopenppp2.so`
+- `bin/android/x86/libopenppp2.so`
+- `bin/android/x86_64/libopenppp2.so`
 
 CMake 配置参数（关键）：
-- `-D_ANDROID_REDEF_STD_IN_OUT_ERR` 改为 `-D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION`
+- `-D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION`
 - `-DTHIRD_PARTY_LIBRARY_DIR=~/Documents/GitHub/openppp2/third-party`
 - `-DBOOST_ANDROID_INCLUDE_DIR`、`-DBOOST_ANDROID_LIB_DIR`、`-DOPENSSL_ANDROID_ROOT` 指向生成的 Android 依赖
 
 ## 7. 编译 APK
 
+将 4 个 ABI 的 `.so` 复制到 `jniLibs` 后，用 Flutter 打包：
+
 ```bash
-cd ~/Documents/GitHub/openppp2/android
-~/flutter/bin/flutter pub get
-~/flutter/bin/flutter build apk --release
+OPENPPP2=~/Documents/GitHub/openppp2
+
+# 复制 .so 到 jniLibs
+for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+  mkdir -p "$OPENPPP2/android/android/app/src/main/jniLibs/$abi"
+  cp "$OPENPPP2/bin/android/$abi/libopenppp2.so" \
+     "$OPENPPP2/android/android/app/src/main/jniLibs/$abi/"
+done
+
+# 打包
+cd "$OPENPPP2/android"
+/opt/homebrew/bin/flutter pub get
+/opt/homebrew/bin/flutter build apk --release
 ```
 
 产物路径：
@@ -120,8 +138,11 @@ openppp2/android/build/app/outputs/flutter-apk/app-release.apk
 ```
 
 APK 内包含：
-- `lib/arm64-v8a/libopenppp2.so`（本地编译，~19 MB 未压缩）
-- `lib/arm64-v8a/libflutter.so`
+- `lib/arm64-v8a/libopenppp2.so`（本地编译，~24 MB 未压缩）
+- `lib/armeabi-v7a/libopenppp2.so`
+- `lib/x86/libopenppp2.so`
+- `lib/x86_64/libopenppp2.so`
+- `lib/<abi>/libflutter.so`
 
 ## 8. Native `.so` NDK 选择和耗时参考
 
@@ -142,29 +163,15 @@ APK 内包含：
 cd ~/Documents/GitHub/openppp2/android/android
 ./gradlew clean
 cd ..
-~/flutter/bin/flutter build apk --release
+/opt/homebrew/bin/flutter build apk --release
 ```
 
-## 10. 其他 ABI（可选）
+## 10. 关键说明
 
-若需 armeabi-v7a / x86 / x86_64，可从 `openppp2-android` 复制 `.so` 到对应 `jniLibs/` 目录，但 arm64-v8a 必须本地编译。
-
-```bash
-OPENPPP2=~/Documents/GitHub/openppp2
-OPENPPP2_ANDROID=~/Documents/GitHub/openppp2-android
-
-for abi in armeabi-v7a x86 x86_64; do
-  mkdir -p "$OPENPPP2/android/android/app/src/main/jniLibs/$abi"
-  cp "$OPENPPP2_ANDROID/app/libs/$abi/libopenppp2.so" \
-     "$OPENPPP2/android/android/app/src/main/jniLibs/$abi/"
-done
-```
-
-## 11. 关键说明
-
-- **构建目录：** 用 `build-android/`（`flutter build` 默认），与 macOS 的 `build-macos/` 分开。
+- **构建目录：** `.so` 产物在 `bin/android/<abi>/`，APK 产物在 `android/build/`，与 macOS 的 `build-macos/` 分开。
 - **构建目标：** `openppp2`（不是 `ppp`）。
-- **OpenSSL 目录：** Android 使用 `third-party/openssl-arm64/`，不要覆盖 macOS 的 OpenSSL 目录。
+- **OpenSSL 目录：** Android 使用 `third-party/openssl-<abi>/`，不要覆盖 macOS 的 OpenSSL 目录。
 - **jemalloc：** Android 构建不需要（CMakeLists.txt 只在 Windows 分支检查 jemalloc）。
-- **NDK 版本：** 推荐使用 r29（`android-ndk-r29-darwin.zip`），和 CI/release 保持一致；r26 可作为本地快速验证备选。
+- **NDK 版本：** 推荐使用 r29（`29.0.14206865`），和 CI/release 保持一致；r26 可作为本地快速验证备选。
 - **C++ 标准：** Android CMake 使用 C++17，并为 Boost 1.86.0 添加 `_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION`。
+- **Flutter：** brew 管理（`brew install --cask flutter`），当前稳定版 3.44.5。
