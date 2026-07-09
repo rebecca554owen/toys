@@ -44,7 +44,26 @@ Android 构建实际链接的产物：
 
 ## 4. 本地依赖准备
 
-Android 依赖（Boost / OpenSSL）已预编译到 `openppp2/third-party/`，四个 ABI 齐全：
+Android 依赖（Boost / OpenSSL）放在 `openppp2/third-party/`。当前本地已预编译四个 ABI，但**目录命名规则本身也应记录清楚**，否则后面很难手动修复或重建。
+
+### 目录命名规则
+
+| 输入 ABI 参数 | Android ABI 目录名 | Boost 输出目录 | OpenSSL 输出目录 |
+|---|---|---|---|
+| `arm64` | `arm64-v8a` | `boost/arm64-v8a/` | `openssl-arm64/` |
+| `arm` | `armeabi-v7a` | `boost/armeabi-v7a/` | `openssl-armeabi-v7a/` |
+| `x86` | `x86` | `boost/x86/` | `openssl-x86/` |
+| `x64` | `x86_64` | `boost/x86_64/` | `openssl-x86_64/` |
+
+源码缓存目录：
+- `third-party/boost-src/`
+- `third-party/openssl-src/`
+
+归档缓存目录：
+- `third-party/boost_1_86_0.tar.bz2`
+- `third-party/openssl-4.0.0.tar.gz`
+
+### 现有产物（已补齐）
 
 | ABI | Boost | OpenSSL |
 |---|---|---|
@@ -53,9 +72,24 @@ Android 依赖（Boost / OpenSSL）已预编译到 `openppp2/third-party/`，四
 | x86 | `boost/x86/libboost_*.a` | `openssl-x86/` |
 | x86_64 | `boost/x86_64/libboost_*.a` | `openssl-x86_64/` |
 
-源码缓存：`third-party/boost-src/` 和 `third-party/openssl-src/`。
+### 依赖重新生成（实测说明）
 
-如需重新编译某个 ABI 的 Boost，参考 `toys` 仓库 CI workflow 中的 Build Boost 步骤。
+已经实测：把以下目录临时改名后，脚本会自动重新解压源码并重建 ABI 依赖：
+- `boost-src/`
+- `openssl-src/`
+- `boost/arm64-v8a/`
+- `openssl-arm64/`
+
+用于**重建依赖**的脚本是：
+
+```bash
+cd ~/Documents/GitHub/toys/openppp
+NDK_ROOT=~/Library/Android/sdk/ndk/29.0.14206865 \
+THIRD_PARTY_DIR=~/Documents/GitHub/openppp2/third-party \
+bash ./build-android-local.sh arm64
+```
+
+> 注意：这条脚本当前可以可靠地**重建依赖**；但在现有上游代码状态下，脚本末尾的一体化 `.so` 链接步骤可能仍会被 `openppp2/android/CMakeLists.txt` 的 OpenSSL 路径选择影响。依赖补全/重建本身没有问题。
 
 ## 5. 签名材料
 
@@ -81,10 +115,10 @@ ln -sf "$KEY/key.properties" "$OPENPPP2/android/android/keystore/yav-release-key
 
 前提：`openppp2/third-party/` 已具备对应 ABI 的 Boost / OpenSSL 产物。
 
-推荐直接在 `openppp2` 仓库里运行本地脚本：
+推荐使用 `toys/openppp/build-android-local.sh`（功能更完整，自动处理依赖+编译+链接）：
 
 ```bash
-cd ~/Documents/GitHub/openppp2
+cd ~/Documents/GitHub/toys/openppp
 NDK_ROOT=~/Library/Android/sdk/ndk/29.0.14206865 \
 THIRD_PARTY_DIR=~/Documents/GitHub/openppp2/third-party \
 bash ./build-android-local.sh arm64
@@ -93,11 +127,13 @@ bash ./build-android-local.sh arm64
 若要一次生成 4 个 ABI：
 
 ```bash
-cd ~/Documents/GitHub/openppp2
+cd ~/Documents/GitHub/toys/openppp
 NDK_ROOT=~/Library/Android/sdk/ndk/29.0.14206865 \
 THIRD_PARTY_DIR=~/Documents/GitHub/openppp2/third-party \
 bash ./build-android-local.sh all
 ```
+
+> 注意：`openppp2/build-android-local.sh` 是上游自带的简化脚本，缺少 OpenSSL/Boost 自动编译和 `OPENSSL_ANDROID_ROOT` 参数传递，推荐优先使用 `toys/openppp/build-android-local.sh`。
 
 arm64 产物路径：`~/Documents/GitHub/openppp2/bin/android/arm64-v8a/libopenppp2.so`
 
