@@ -2,7 +2,9 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.5.4"
+SCRIPT_VERSION="1.5.5"
+set -euo pipefail
+
 SYSCTL_CONF="/etc/sysctl.d/99-bbr-kcc.conf"
 LEGACY_SYSCTL_CONF="/etc/sysctl.d/00-bbr.conf"
 MODULES_LOAD_CONF="/etc/modules-load.d/99-bbr-kcc.conf"
@@ -20,6 +22,18 @@ KCC_KF_DISCOUNT_NUM=50
 KCC_KF_DISCOUNT_DEN=100
 KCC_KF_STEADY_MODE=1
 KCC_RTT_MODE=0
+KCC_INJECTION_DIVISOR=2.885
+
+# Temp file tracking for cleanup on unexpected exit
+TEMP_FILES=()
+cleanup_temp_files() {
+    local exit_code=$?
+    for f in "${TEMP_FILES[@]}"; do
+        [ -f "$f" ] && rm -f "$f" 2>/dev/null || true
+    done
+    exit $exit_code
+}
+trap cleanup_temp_files EXIT
 
 get_sysctl_value() {
     sysctl -n "$1" 2>/dev/null || echo "未知"
@@ -258,7 +272,7 @@ ensure_build_environment() {
     local action_name=$1
 
     if ! check_kcc_build_requirements; then
-        read -p "检测到构建依赖缺失，是否尝试自动安装？[Y/n]: " install_deps
+        read -r -p "检测到构建依赖缺失，是否尝试自动安装？[Y/n]: " install_deps
         case $install_deps in
             ""|y|Y)
                 install_build_dependencies || {
@@ -296,7 +310,7 @@ prompt_kernel_update_if_headers_missing() {
     echo "当前运行内核缺少构建目录: /lib/modules/$(uname -r)/build"
     echo "这通常表示当前内核对应 headers 已不在软件源中，或尚未安装。"
     echo "可以安装软件源提供的最新内核和 headers，重启后再回来编译 KCC。"
-    read -p "是否安装/更新最新内核和 headers？[Y/n]: " update_kernel
+    read -r -p "是否安装/更新最新内核和 headers？[Y/n]: " update_kernel
     case $update_kernel in
         ""|y|Y)
             install_kernel_update_for_headers || {
@@ -305,7 +319,7 @@ prompt_kernel_update_if_headers_missing() {
             }
             echo "内核和 headers 已安装/更新。"
             echo "请现在重启系统，重启后再次运行脚本并选择对应的“安装/更新”模块选项。"
-            read -p "是否立即重启？[y/N]: " reboot_now
+            read -r -p "是否立即重启？[y/N]: " reboot_now
             case $reboot_now in
                 y|Y)
                     systemctl reboot
@@ -340,7 +354,7 @@ prepare_kcc_source() {
         git -C "$KCC_SRC_DIR" reset --hard "origin/$KCC_BRANCH" || return 1
     else
         echo "克隆 KCC 源码到: $KCC_SRC_DIR"
-        rm -rf "$KCC_SRC_DIR"
+        [ -n "$KCC_SRC_DIR" ] && rm -rf "$KCC_SRC_DIR"
         git clone --branch "$KCC_BRANCH" "$KCC_REPO_URL" "$KCC_SRC_DIR"
         _KCC_PRE_RESET_COMMIT=""
     fi
@@ -925,7 +939,7 @@ ensure_kcc_ready() {
     fi
 
     echo "KCC 未安装或未加载，无法直接应用 KCC 方案。"
-    read -p "是否立即编译/安装/加载 KCC 模块？[Y/n]: " install_now
+    read -r -p "是否立即编译/安装/加载 KCC 模块？[Y/n]: " install_now
     case $install_now in
         ""|y|Y)
             install_kcc_module
@@ -952,7 +966,7 @@ ensure_bbr_ready() {
 
     echo "BBR1 未安装或未加载，无法直接应用 bbr1。"
     echo "将使用 KCC 仓库 google/patch 目录中的补丁 BBR1 模块。"
-    read -p "是否立即编译/安装/加载 BBR1 模块？[Y/n]: " install_now
+    read -r -p "是否立即编译/安装/加载 BBR1 模块？[Y/n]: " install_now
     case $install_now in
         ""|y|Y)
             install_bbr_module
@@ -989,7 +1003,7 @@ apply_optimization_menu() {
     echo "9. bbr + fq_pie"
     echo
     echo "0. 返回主菜单"
-    read -p "请输入选择 [0-9] (默认1): " choice
+    read -r -p "请输入选择 [0-9] (默认1): " choice
 
     case $choice in
         1|"")
@@ -1102,7 +1116,7 @@ format_kcc_injection_percent() {
         return 0
     fi
 
-    awk -v num="$num" -v den="$den" 'BEGIN { printf "%.1f%%", (num / den / 2.885) * 100 }'
+    awk -v num="$num" -v den="$den" -v div="$KCC_INJECTION_DIVISOR" 'BEGIN { printf "%.1f%%", (num / den / div) * 100 }'
 }
 
 format_kcc_enabled_label() {
@@ -1412,6 +1426,7 @@ write_sysctl_conf_value() {
     mkdir -p "$conf_dir" || return 1
     touch "$SYSCTL_CONF" || return 1
     tmp_file=$(mktemp "$conf_dir/.bbr-sysctl.XXXXXX") || return 1
+    TEMP_FILES+=("$tmp_file")
 
     awk -F= -v key="$key" -v value="$value" '
         {
@@ -1464,7 +1479,7 @@ apply_kcc_tuning_runtime() {
 
     if ! ensure_congestion_control_available kcc; then
         echo "KCC 未安装或未加载，当前只完成持久化配置。"
-        read -p "是否立即编译/安装/加载 KCC 模块并尝试运行时生效？[y/N]: " install_now
+        read -r -p "是否立即编译/安装/加载 KCC 模块并尝试运行时生效？[y/N]: " install_now
         case $install_now in
             y|Y)
                 install_kcc_module || {
@@ -1570,7 +1585,7 @@ kcc_tuning_menu() {
         echo "6. RTT 模式：FILTER=0 通用稳定（脚本默认，KCC 默认）"
         echo "7. RTT 模式：BBR=1 传统 min_rtt 窗口（轻载/单流特定场景）"
         echo "0. 返回主菜单"
-        read -p "请输入选择 [0-7]，回车刷新: " choice
+        read -r -p "请输入选择 [0-7]，回车刷新: " choice
 
         case $choice in
             "")
@@ -1621,6 +1636,7 @@ strip_conflicting_sysctl_lines() {
     backup_file="$conf.bbr-kcc-backup-$(date +%Y%m%d%H%M%S)"
     cp -p "$conf" "$backup_file" 2>/dev/null || cp "$conf" "$backup_file" || return 1
     tmp_file=$(mktemp "$(dirname "$conf")/.bbr-kcc-sysctl.XXXXXX") || return 1
+    TEMP_FILES+=("$tmp_file")
     awk '
         /^[[:space:]]*net\.(core\.default_qdisc|ipv4\.tcp_congestion_control)[[:space:]]*=/ {
             print "# disabled-by-bbr-kcc: " $0
@@ -1675,7 +1691,7 @@ archive_conflicting_sysctl_configs() {
 
 # 生成sysctl配置并应用
 generate_sysctl_conf() {
-    local kf_enable kf_discount_num kf_discount_den kcc_kf_steady kcc_rtt_mode
+    local kf_enable kf_discount_num kf_discount_den kcc_kf_steady kcc_rtt_mode MIN_FREE_KBYTES
 
     kf_enable=$(get_kcc_effective_value kcc_kf_enable "$KCC_KF_ENABLE")
     kf_discount_num=$(get_kcc_effective_value kcc_kf_discount_num "$KCC_KF_DISCOUNT_NUM")
@@ -1684,9 +1700,9 @@ generate_sysctl_conf() {
     kcc_rtt_mode=$(get_kcc_effective_value kcc_rtt_mode "$KCC_RTT_MODE")
     if [ "$congestion_control" = "kcc" ]; then
         kf_enable=1
-        kcc_kf_steady=$KCC_KF_STEADY_MODE
-        kcc_rtt_mode=$KCC_RTT_MODE
     fi
+
+    MIN_FREE_KBYTES=$(awk '/MemTotal/ {printf "%d", $2 * 0.005}' /proc/meminfo 2>/dev/null || echo 65536)
 
     cat > "$SYSCTL_CONF" << EOF
 # $SYSCTL_CONF - BBR/KCC 系统变量配置文件
@@ -1695,7 +1711,7 @@ generate_sysctl_conf() {
 
 # 内核相关配置
 kernel.pid_max = 65535
-kernel.panic = 1
+kernel.panic = 10
 kernel.sysrq = 1
 kernel.core_pattern = core_%e
 kernel.printk = 3 4 1 3
@@ -1708,7 +1724,7 @@ vm.dirty_ratio = 10
 vm.dirty_background_ratio = 5
 vm.panic_on_oom = 1
 vm.overcommit_memory = 1
-vm.min_free_kbytes = 90214
+vm.min_free_kbytes = $MIN_FREE_KBYTES
 
 # 网络核心参数配置
 net.core.netdev_max_backlog = 2000
@@ -1832,7 +1848,7 @@ menu() {
         echo "6. 恢复默认 BBR (bbr + fq)"
         echo "7. 重启系统"
         echo "0. 退出"
-        read -p "请输入选项 [0-7]，回车刷新: " option
+        read -r -p "请输入选项 [0-7]，回车刷新: " option
 
         case $option in
             "")
