@@ -44,20 +44,51 @@ Android 构建实际链接的产物：
 
 ## 4. 依赖生成与 `.so` 编译（一条命令完成）
 
-`toys/openppp/build-android-local.sh` 会自动完成全部工作：检测依赖是否存在 → 缺了就从源码编译 Boost / OpenSSL → 编译并链接 `libopenppp2.so`。
+`toys/openppp/build-android-local.py` 会自动完成全部工作：检测依赖是否存在 → 缺了就从源码编译 Boost / OpenSSL → 编译并链接 `libopenppp2.so`。脚本会显示 CMake/Ninja 进度，并在失败时打印关键错误和完整日志路径。`build-android-local.sh` 仅作为兼容包装入口。
 
 ### 命令
 
 ```bash
 cd ~/Documents/GitHub/toys/openppp
 NDK_ROOT=~/Library/Android/sdk/ndk/29.0.14206865 \
-THIRD_PARTY_DIR=~/Documents/GitHub/openppp2/third-party \
-bash ./build-android-local.sh arm64      # 单 ABI
+python3 ./build-android-local.py arm64      # 单 ABI
 # 或
-bash ./build-android-local.sh all         # 全部 4 个 ABI
+python3 ./build-android-local.py all         # 全部 4 个 ABI
 ```
 
-> 注意：优先使用 `toys/openppp/build-android-local.sh`。`openppp2/build-android-local.sh` 是上游自带的简化脚本，缺少依赖自动编译和 `OPENSSL_ANDROID_ROOT` 参数传递。
+> 注意：优先使用 `toys/openppp/build-android-local.py`。`openppp2/build-android-local.sh` 是上游自带的简化脚本，缺少依赖自动编译和 `OPENSSL_ANDROID_ROOT` 参数传递。
+
+### 验证指定分支
+
+使用 `BRANCH` 指定要验证的 `rebecca554owen/openppp2` 远端分支；脚本会自动创建 `/tmp/openppp2-validate-<branch>` worktree，并默认把它的 `third-party` 软链到 `~/Documents/GitHub/openppp2/third-party` 共享缓存：
+
+```bash
+cd ~/Documents/GitHub/toys/openppp
+BRANCH=dev
+
+# 先验证 arm64，没问题后再跑 all
+python3 ./build-android-local.py arm64 --branch "$BRANCH"
+python3 ./build-android-local.py all --branch "$BRANCH"
+```
+
+对比多个分支：
+
+```bash
+for BRANCH in main dev; do
+  python3 ./build-android-local.py all --branch "$BRANCH"
+done
+```
+
+常用参数：
+
+- `--branch <branch>`：自动 `git fetch origin <branch>`，并 checkout 到 `/tmp/openppp2-validate-<branch>`。
+- `--no-fetch`：跳过 fetch，直接使用本地已有的 `origin/<branch>`。
+- `--openppp2-root /path/to/openppp2`：手动指定源码目录，不创建 worktree。
+- `--third-party-dir /path/to/third-party`：手动指定依赖目录。
+- `--isolated-third-party`：使用当前 worktree 自己的 `third-party/`，不软链共享缓存。
+- `--log-dir /path/to/logs`：指定日志根目录；默认在 `toys/openppp/build/logs/android-local/<branch>-<commit>/`，该目录已被 git 忽略。
+
+单分支或串行验证默认复用共享缓存，避免重复下载和编译 Boost/OpenSSL；多个分支并行验证时使用 `--isolated-third-party`，避免共享源码目录互相 clean/configure。
 
 ### 目录命名规则
 
