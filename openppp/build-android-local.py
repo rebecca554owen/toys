@@ -34,9 +34,6 @@ class AbiConfig:
 
 ABI_CONFIGS = {
     "arm64": AbiConfig("arm64", "aarch64", "arm64-v8a", "android-arm64", "aarch64-linux-android", "androidarm64", "arm", "64", "aapcs", "openssl-arm64"),
-    "arm": AbiConfig("arm", "armv7a", "armeabi-v7a", "android-arm", "armv7a-linux-androideabi", "androidarm", "arm", "32", "aapcs", "openssl-armeabi-v7a"),
-    "x86": AbiConfig("x86", "x86", "x86", "android-x86", "i686-linux-android", "androidx86", "x86", "32", "sysv", "openssl-x86"),
-    "x64": AbiConfig("x64", "x64", "x86_64", "android-x86_64", "x86_64-linux-android", "androidx64", "x86", "64", "sysv", "openssl-x86_64"),
 }
 
 
@@ -420,7 +417,7 @@ class Builder:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="OpenPPP2 Android NDK 本地构建脚本")
-    parser.add_argument("action", nargs="?", default="arm64", choices=["arm64", "arm", "x86", "x64", "all", "clean"], help="构建 ABI 或 all/clean")
+    parser.add_argument("action", nargs="?", default="arm64", choices=["arm64", "all", "clean"], help="构建 arm64、all（同 arm64）或 clean")
     parser.add_argument("--branch", help="验证 origin/<branch>，自动创建/更新 /tmp/openppp2-validate-<branch> detached worktree")
     parser.add_argument("--repo-root", default=str(HOME / "Documents/GitHub/openppp2"), help="用于创建 worktree 和共享 third-party 缓存的 openppp2 主仓库路径")
     parser.add_argument("--worktree-base", default="/tmp", help="验证 worktree 根目录")
@@ -447,7 +444,7 @@ def main() -> int:
         if args.action == "clean":
             builder.clean()
             return 0
-        actions = ["arm", "x86", "x64", "arm64"] if args.action == "all" else [args.action]
+        actions = ["arm64"] if args.action == "all" else [args.action]
         for action in actions:
             builder.build_abi(ABI_CONFIGS[action])
         builder.info("\n构建完成!")
