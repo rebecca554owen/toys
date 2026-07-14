@@ -53,7 +53,7 @@ cd ~/Documents/GitHub/toys/openppp
 NDK_ROOT=~/Library/Android/sdk/ndk/29.0.14206865 \
 python3 ./build-android-local.py arm64      # 单 ABI
 # 或
-python3 ./build-android-local.py all         # 全部 4 个 ABI
+python3 ./build-android-local.py all         # 兼容别名，同 arm64
 ```
 
 > 注意：优先使用 `toys/openppp/build-android-local.py`。`openppp2/build-android-local.sh` 是上游自带的简化脚本，缺少依赖自动编译和 `OPENSSL_ANDROID_ROOT` 参数传递。
@@ -95,9 +95,6 @@ done
 | 输入参数 | Android ABI | Boost 目录 | OpenSSL 目录 |
 |---|---|---|---|
 | `arm64` | `arm64-v8a` | `boost/arm64-v8a/` | `openssl-arm64/` |
-| `arm` | `armeabi-v7a` | `boost/armeabi-v7a/` | `openssl-armeabi-v7a/` |
-| `x86` | `x86` | `boost/x86/` | `openssl-x86/` |
-| `x64` | `x86_64` | `boost/x86_64/` | `openssl-x86_64/` |
 
 源码缓存：`third-party/boost-src/`、`third-party/openssl-src/`
 
@@ -110,9 +107,6 @@ done
 ### 产物路径
 
 - `openppp2/bin/android/arm64-v8a/libopenppp2.so`
-- `openppp2/bin/android/armeabi-v7a/libopenppp2.so`
-- `openppp2/bin/android/x86/libopenppp2.so`
-- `openppp2/bin/android/x86_64/libopenppp2.so`
 
 ## 5. 签名材料
 
@@ -136,17 +130,15 @@ ln -sf "$KEY/key.properties" "$OPENPPP2/android/android/keystore/yav-release-key
 
 ## 7. 编译 APK
 
-将 4 个 ABI 的 `.so` 复制到 `jniLibs` 后，用 Flutter 打包：
+将 arm64 的 `.so` 复制到 `jniLibs` 后，用 Flutter 打包：
 
 ```bash
 OPENPPP2=~/Documents/GitHub/openppp2
 
-# 复制 .so 到 jniLibs
-for abi in arm64-v8a armeabi-v7a x86 x86_64; do
-  mkdir -p "$OPENPPP2/android/android/app/src/main/jniLibs/$abi"
-  cp "$OPENPPP2/bin/android/$abi/libopenppp2.so" \
-     "$OPENPPP2/android/android/app/src/main/jniLibs/$abi/"
-done
+# 复制 arm64 .so 到 jniLibs
+mkdir -p "$OPENPPP2/android/android/app/src/main/jniLibs/arm64-v8a"
+cp "$OPENPPP2/bin/android/arm64-v8a/libopenppp2.so" \
+   "$OPENPPP2/android/android/app/src/main/jniLibs/arm64-v8a/"
 
 # 打包
 cd "$OPENPPP2/android"
@@ -161,9 +153,6 @@ openppp2/android/build/app/outputs/flutter-apk/app-release.apk
 
 APK 内包含：
 - `lib/arm64-v8a/libopenppp2.so`（本地编译，~24 MB 未压缩）
-- `lib/armeabi-v7a/libopenppp2.so`
-- `lib/x86/libopenppp2.so`
-- `lib/x86_64/libopenppp2.so`
 - `lib/<abi>/libflutter.so`
 
 ## 8. Native `.so` NDK 选择和耗时参考

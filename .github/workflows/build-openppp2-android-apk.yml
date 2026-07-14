@@ -30,7 +30,7 @@ jobs:
     runs-on: macos-14
     strategy:
       matrix:
-        ANDROID_ABI: [arm64-v8a, armeabi-v7a, x86, x86_64]
+        ANDROID_ABI: [arm64-v8a]
     env:
       ANDROID_ABI: ${{ matrix.ANDROID_ABI }}
       ANDROID_API: "21"
@@ -83,45 +83,13 @@ jobs:
 
           test -f "$NDK_ROOT/build/cmake/android.toolchain.cmake"
 
-          # Map ABI to toolchain and OpenSSL suffix
-          case "${{ matrix.ANDROID_ABI }}" in
-            arm64-v8a)
-              CLANG_TRIPLE="aarch64-linux-android"
-              BOOST_TOOLSET_SUFFIX="androidarm64"
-              BOOST_ARCHITECTURE="arm"
-              BOOST_ADDRESS_MODEL="64"
-              BOOST_ABI="aapcs"
-              OPENSSL_SUFFIX="arm64"
-              OPENSSL_TARGET="android-arm64"
-              ;;
-            armeabi-v7a)
-              CLANG_TRIPLE="armv7a-linux-androideabi"
-              BOOST_TOOLSET_SUFFIX="androidarm"
-              BOOST_ARCHITECTURE="arm"
-              BOOST_ADDRESS_MODEL="32"
-              BOOST_ABI="aapcs"
-              OPENSSL_SUFFIX="armeabi-v7a"
-              OPENSSL_TARGET="android-arm"
-              ;;
-            x86)
-              CLANG_TRIPLE="i686-linux-android"
-              BOOST_TOOLSET_SUFFIX="androidx86"
-              BOOST_ARCHITECTURE="x86"
-              BOOST_ADDRESS_MODEL="32"
-              BOOST_ABI="sysv"
-              OPENSSL_SUFFIX="x86"
-              OPENSSL_TARGET="android-x86"
-              ;;
-            x86_64)
-              CLANG_TRIPLE="x86_64-linux-android"
-              BOOST_TOOLSET_SUFFIX="androidx64"
-              BOOST_ARCHITECTURE="x86"
-              BOOST_ADDRESS_MODEL="64"
-              BOOST_ABI="sysv"
-              OPENSSL_SUFFIX="x86-64"
-              OPENSSL_TARGET="android-x86_64"
-              ;;
-          esac
+          CLANG_TRIPLE="aarch64-linux-android"
+          BOOST_TOOLSET_SUFFIX="androidarm64"
+          BOOST_ARCHITECTURE="arm"
+          BOOST_ADDRESS_MODEL="64"
+          BOOST_ABI="aapcs"
+          OPENSSL_SUFFIX="arm64"
+          OPENSSL_TARGET="android-arm64"
 
           mkdir -p "$TP"
 

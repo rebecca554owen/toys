@@ -151,6 +151,13 @@ FILE(GLOB_RECURSE SOURCE_FILES
     ${PROJECT_ROOT_DIR}/android/OpenPPP2VpnProtectBridge.cpp
     ${PROJECT_ROOT_DIR}/android/OpenPPP2TelemetryBridge.cpp)
 
+# Android uses MobileRoutePlatform. Do not compile the desktop route adapters
+# pulled in by the recursive ppp source glob.
+LIST(REMOVE_ITEM SOURCE_FILES
+    "${PROJECT_ROOT_DIR}/ppp/app/client/route/DarwinRoutePlatform.cpp"
+    "${PROJECT_ROOT_DIR}/ppp/app/client/route/LinuxRoutePlatform.cpp"
+    "${PROJECT_ROOT_DIR}/ppp/app/client/route/WindowsRoutePlatform.cpp")
+
 # Add the compiled output binary files.
 ADD_LIBRARY(${NAME} SHARED ${SOURCE_FILES} ${PLATFORM_SOURCE_FILES} ${AES_NI_SOURCE_FILES})
 
