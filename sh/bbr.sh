@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.6.0"
+SCRIPT_VERSION="1.6.1"
 set -euo pipefail
 
 SYSCTL_CONF="/etc/sysctl.d/99-bbr-kcc.conf"
@@ -347,6 +347,7 @@ prepare_kcc_source() {
         fi
         _KCC_PRE_RESET_COMMIT=$(git -C "$KCC_SRC_DIR" rev-parse HEAD 2>/dev/null || true)
         echo "丢弃源码本地改动并对齐远端分支: origin/$KCC_BRANCH"
+        git -C "$KCC_SRC_DIR" reset --hard HEAD || return 1
         git -C "$KCC_SRC_DIR" checkout -B "$KCC_BRANCH" "origin/$KCC_BRANCH" || return 1
         git -C "$KCC_SRC_DIR" reset --hard "origin/$KCC_BRANCH" || return 1
     else
