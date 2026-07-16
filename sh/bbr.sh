@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.6.1"
+SCRIPT_VERSION="1.6.2"
 set -euo pipefail
 
 SYSCTL_CONF="/etc/sysctl.d/99-bbr-kcc.conf"
@@ -17,9 +17,11 @@ KCC_PATCH_DIR="$KCC_SRC_DIR/google/patch"
 
 qdisc="cake"
 congestion_control="kcc"
-KCC_DRAIN_SKIP_MIN_RTT_SHIFT=3
-KCC_DRAIN_SKIP_MIN_RTT_US=5000
-KCC_SCALE=1024
+KCC_KF_ENABLE=1
+KCC_KF_DISCOUNT_NUM=50
+KCC_KF_DISCOUNT_DEN=100
+KCC_KF_STEADY_MODE=1
+KCC_INJECTION_DIVISOR=2.885
 
 # Temp file tracking for cleanup on unexpected exit
 TEMP_FILES=()
@@ -46,7 +48,7 @@ has_congestion_control() {
 }
 
 get_kcc_module_status() {
-    if lsmod 2>/dev/null | grep -qw tcp_kcc; then
+    if [ -d /sys/module/tcp_kcc ]; then
         echo "已加载"
     elif command -v modinfo >/dev/null 2>&1 && modinfo tcp_kcc >/dev/null 2>&1; then
         echo "已安装未加载"
@@ -56,7 +58,7 @@ get_kcc_module_status() {
 }
 
 get_bbr_module_status() {
-    if lsmod 2>/dev/null | grep -qw tcp_bbr; then
+    if [ -d /sys/module/tcp_bbr ]; then
         echo "已加载"
     elif command -v modinfo >/dev/null 2>&1 && modinfo tcp_bbr >/dev/null 2>&1; then
         echo "已安装未加载"
@@ -66,7 +68,7 @@ get_bbr_module_status() {
 }
 
 get_patched_bbr_module_status() {
-    if lsmod 2>/dev/null | grep -qw tcp_bbr1; then
+    if [ -d /sys/module/tcp_bbr1 ]; then
         echo "已加载"
     elif command -v modinfo >/dev/null 2>&1 && modinfo tcp_bbr1 >/dev/null 2>&1; then
         echo "已安装未加载"
@@ -1093,6 +1095,38 @@ is_positive_integer() {
     is_non_negative_integer "$1" && [ "$1" -gt 0 ]
 }
 
+format_kcc_gain() {
+    local num=$1
+    local den=$2
+
+    if ! is_positive_integer "$num" || ! is_positive_integer "$den"; then
+        echo "未知"
+        return 0
+    fi
+
+    awk -v num="$num" -v den="$den" 'BEGIN { printf "%.2fx", num / den }'
+}
+
+format_kcc_injection_percent() {
+    local num=$1
+    local den=$2
+
+    if ! is_positive_integer "$num" || ! is_positive_integer "$den"; then
+        echo "未知"
+        return 0
+    fi
+
+    awk -v num="$num" -v den="$den" -v div="$KCC_INJECTION_DIVISOR" 'BEGIN { printf "%.1f%%", (num / den / div) * 100 }'
+}
+
+format_kcc_enabled_label() {
+    if [ "$1" = "1" ]; then
+        echo "启用"
+    else
+        echo "禁用"
+    fi
+}
+
 read_sysctl_conf_value() {
     local key=$1
     local conf
@@ -1139,21 +1173,19 @@ get_kcc_effective_value() {
 }
 
 show_kcc_tuning_status() {
-    local shift min_rtt_us scale
+    local kf_enable discount_num discount_den kf_steady inactive_note=""
 
-    shift=$(get_kcc_effective_value kcc_drain_skip_min_rtt_shift "$KCC_DRAIN_SKIP_MIN_RTT_SHIFT")
-    min_rtt_us=$(get_kcc_effective_value kcc_drain_skip_min_rtt_us "$KCC_DRAIN_SKIP_MIN_RTT_US")
-    scale=$(get_kcc_effective_value kcc_scale "$KCC_SCALE")
+    kf_enable=$(get_kcc_effective_value kcc_kf_enable "$KCC_KF_ENABLE")
+    discount_num=$(get_kcc_effective_value kcc_kf_discount_num "$KCC_KF_DISCOUNT_NUM")
+    discount_den=$(get_kcc_effective_value kcc_kf_discount_den "$KCC_KF_DISCOUNT_DEN")
+    kf_steady=$(get_kcc_effective_value kcc_kf_steady_mode "$KCC_KF_STEADY_MODE")
+    [ "$kf_enable" = "1" ] || inactive_note="（未生效）"
 
     echo "====== KCC 2.0 参数 ======"
-    echo "DRAIN 跳过阈值位移: $shift"
-    echo "DRAIN 跳过最低 RTT: $min_rtt_us us"
-    echo "估算器定点缩放: $scale"
-    echo "RTT 模式: FILTER（KCC 2.0 固定）"
-    echo "跨连接 KF 注入: 编译期禁用"
-    if ! sysctl -n net.kcc.kcc_scale >/dev/null 2>&1 && sysctl -n net.kcc.kcc_kf_enable >/dev/null 2>&1; then
-        echo "提示：当前加载的是 KCC 1.x，请先更新 KCC 模块。"
-    fi
+    echo "跨连接 KF 注入: $(format_kcc_enabled_label "$kf_enable")"
+    echo "稳态峰值: $(format_kcc_enabled_label "$kf_steady")$inactive_note"
+    echo "甜点速度: $discount_num/$discount_den = $(format_kcc_gain "$discount_num" "$discount_den")；预计初始注入 fair-share × $(format_kcc_injection_percent "$discount_num" "$discount_den")$inactive_note"
+    echo "部署限制: KF 注入仅适合共享同一瓶颈路径的单宿主环境"
     echo "====================="
 }
 
@@ -1385,10 +1417,9 @@ remove_obsolete_kcc_sysctl_values() {
             key = $1
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
         }
-        key == "net.kcc.kcc_kf_enable" ||
-        key == "net.kcc.kcc_kf_discount_num" ||
-        key == "net.kcc.kcc_kf_discount_den" ||
-        key == "net.kcc.kcc_kf_steady_mode" ||
+        key == "net.kcc.kcc_drain_skip_min_rtt_shift" ||
+        key == "net.kcc.kcc_drain_skip_min_rtt_us" ||
+        key == "net.kcc.kcc_scale" ||
         key == "net.kcc.kcc_rtt_mode" { next }
         { print }
     ' "$SYSCTL_CONF" > "$tmp_file" || {
@@ -1401,21 +1432,23 @@ remove_obsolete_kcc_sysctl_values() {
 }
 
 persist_kcc_tuning() {
-    local shift=$1
-    local min_rtt_us=$2
-    local scale=$3
+    local kf_enable=$1
+    local discount_num=$2
+    local discount_den=$3
+    local kf_steady=$4
 
     remove_obsolete_kcc_sysctl_values || return 1
-    write_sysctl_conf_value net.kcc.kcc_drain_skip_min_rtt_shift "$shift" || return 1
-    write_sysctl_conf_value net.kcc.kcc_drain_skip_min_rtt_us "$min_rtt_us" || return 1
-    write_sysctl_conf_value net.kcc.kcc_scale "$scale" || return 1
+    write_sysctl_conf_value net.kcc.kcc_kf_enable "$kf_enable" || return 1
+    write_sysctl_conf_value net.kcc.kcc_kf_discount_num "$discount_num" || return 1
+    write_sysctl_conf_value net.kcc.kcc_kf_discount_den "$discount_den" || return 1
+    write_sysctl_conf_value net.kcc.kcc_kf_steady_mode "$kf_steady" || return 1
 }
 
 apply_kcc_tuning_runtime() {
-    local shift=$1
-    local min_rtt_us=$2
-    local scale=$3
-    local failed=0
+    local kf_enable=$1
+    local discount_num=$2
+    local discount_den=$3
+    local kf_steady=$4
 
     if ! ensure_congestion_control_available kcc; then
         echo "KCC 未安装或未加载，当前只完成持久化配置。"
@@ -1435,87 +1468,110 @@ apply_kcc_tuning_runtime() {
     fi
 
     echo "写入 KCC 2.0 运行时参数..."
-    sysctl -q -w "net.kcc.kcc_drain_skip_min_rtt_shift=$shift" 2>/dev/null || failed=1
-    sysctl -q -w "net.kcc.kcc_drain_skip_min_rtt_us=$min_rtt_us" 2>/dev/null || failed=1
-    if ! sysctl -q -w "net.kcc.kcc_scale=$scale" 2>/dev/null; then
-        failed=1
-        echo "提示：存在活动 KCC 连接时不能修改 kcc_scale，持久配置会在模块重载或重启后生效。"
-    fi
-    if [ "$failed" -eq 0 ]; then
+    if sysctl -q -w \
+        "net.kcc.kcc_kf_enable=$kf_enable" \
+        "net.kcc.kcc_kf_discount_num=$discount_num" \
+        "net.kcc.kcc_kf_discount_den=$discount_den" \
+        "net.kcc.kcc_kf_steady_mode=$kf_steady"; then
         echo "KCC 2.0 运行时参数已生效。"
     else
-        echo "部分 KCC 参数未能立即生效；持久化配置已保留。"
+        echo "KCC 2.0 运行时参数写入失败；持久化配置已保留。"
     fi
 }
 
 apply_kcc_tuning() {
-    local shift=$1
-    local min_rtt_us=$2
-    local scale=$3
+    local kf_enable=$1
+    local discount_num=$2
+    local discount_den=$3
+    local kf_steady=$4
 
     require_linux || return 1
     require_root || return 1
 
-    if ! is_non_negative_integer "$shift" || [ "$shift" -gt 7 ] || \
-        ! is_non_negative_integer "$min_rtt_us" || [ "$min_rtt_us" -gt 1000000 ] || \
-        ! is_positive_integer "$scale" || [ "$scale" -lt 64 ] || [ "$scale" -gt 1048576 ] || \
-        [ $((scale & (scale - 1))) -ne 0 ]; then
+    if ! is_non_negative_integer "$kf_enable" || [ "$kf_enable" -gt 1 ] || \
+        ! is_non_negative_integer "$kf_steady" || [ "$kf_steady" -gt 1 ] || \
+        ! is_positive_integer "$discount_num" || [ "$discount_num" -gt 10000 ] || \
+        ! is_positive_integer "$discount_den" || [ "$discount_den" -gt 10000 ]; then
         echo "KCC 参数格式不正确。"
         return 1
     fi
 
-    persist_kcc_tuning "$shift" "$min_rtt_us" "$scale" || {
+    persist_kcc_tuning "$kf_enable" "$discount_num" "$discount_den" "$kf_steady" || {
         echo "写入 $SYSCTL_CONF 持久配置失败"
         return 1
     }
     echo "KCC 参数已持久化到 $SYSCTL_CONF"
 
-    apply_kcc_tuning_runtime "$shift" "$min_rtt_us" "$scale"
+    apply_kcc_tuning_runtime "$kf_enable" "$discount_num" "$discount_den" "$kf_steady"
     show_kcc_tuning_status
 }
 
 kcc_tuning_menu() {
-    local choice shift min_rtt_us scale value
+    local choice kf_enable kf_enable_new kf_enable_label kf_steady kf_steady_new kf_steady_label
+    local discount_num discount_den
 
     while true; do
-        shift=$(get_kcc_effective_value kcc_drain_skip_min_rtt_shift "$KCC_DRAIN_SKIP_MIN_RTT_SHIFT")
-        min_rtt_us=$(get_kcc_effective_value kcc_drain_skip_min_rtt_us "$KCC_DRAIN_SKIP_MIN_RTT_US")
-        scale=$(get_kcc_effective_value kcc_scale "$KCC_SCALE")
+        kf_enable=$(get_kcc_effective_value kcc_kf_enable "$KCC_KF_ENABLE")
+        discount_num=$(get_kcc_effective_value kcc_kf_discount_num "$KCC_KF_DISCOUNT_NUM")
+        discount_den=$(get_kcc_effective_value kcc_kf_discount_den "$KCC_KF_DISCOUNT_DEN")
+        kf_steady=$(get_kcc_effective_value kcc_kf_steady_mode "$KCC_KF_STEADY_MODE")
+        if [ "$kf_enable" = "1" ]; then
+            kf_enable_label="启用 → 切换禁用"
+            kf_enable_new=0
+        else
+            kf_enable_label="禁用 → 切换启用"
+            kf_enable_new=1
+        fi
+        if [ "$kf_steady" = "1" ]; then
+            kf_steady_label="启用 → 切换禁用"
+            kf_steady_new=0
+        else
+            kf_steady_label="禁用 → 切换启用"
+            kf_steady_new=1
+        fi
 
         echo "====== KCC 2.0 参数调优 ======"
         echo
         echo "说明:"
-        echo "  drain_skip_min_rtt_shift  DRAIN 跳过判断使用 min_rtt >> shift，范围 0-7。"
-        echo "  drain_skip_min_rtt_us     允许跳过 DRAIN 的最低 RTT，范围 0-1000000 us。"
-        echo "  scale                     RTT 估算器定点缩放，必须是 64-1048576 的 2 次幂。"
-        echo "  KCC 2.0 固定使用 FILTER；KF 注入和原 RTT 模式不再提供运行时开关。"
+        echo "  kf_enable       跨连接带宽估计注入总开关，仅适合共享同一瓶颈路径的单宿主环境。"
+        echo "  kf_steady_mode  新连接使用已学习的单调峰值，稳定链路可减少冷启动慢热。"
+        echo "  kf_discount     初始注入约为 discount / high_gain，源码默认 50/100。"
         echo
         show_kcc_runtime_overview
         echo
-        echo "1. 设置 DRAIN 跳过阈值位移（当前 ${shift}）"
-        echo "2. 设置 DRAIN 跳过最低 RTT（当前 $min_rtt_us us）"
-        echo "3. 设置估算器定点缩放（当前 ${scale}）"
-        echo "4. 恢复 KCC 2.0 默认参数"
+        echo "1. KF 注入：当前 $kf_enable_label"
+        echo "2. 稳态峰值：当前 $kf_steady_label"
+        echo "3. 保守预设：1,35/100,1，预计注入 fair-share × $(format_kcc_injection_percent 35 100)"
+        echo "4. 默认甜点速度：1,50/100,1，预计注入 fair-share × $(format_kcc_injection_percent 50 100)"
+        echo "5. 激进预设：1,75/100,1，预计注入 fair-share × $(format_kcc_injection_percent 75 100)"
+        echo "6. 恢复源码默认：0,50/100,0"
+        echo "7. 单宿主推荐：1,50/100,1"
         echo "0. 返回主菜单"
-        read -r -p "请输入选择 [0-4]，回车刷新: " choice
+        read -r -p "请输入选择 [0-7]，回车刷新: " choice
 
         case $choice in
             "")
                 ;;
             1)
-                read -r -p "请输入位移 [0-7]: " value
-                apply_kcc_tuning "$value" "$min_rtt_us" "$scale"
+                apply_kcc_tuning "$kf_enable_new" "$discount_num" "$discount_den" "$kf_steady"
                 ;;
             2)
-                read -r -p "请输入最低 RTT [0-1000000 us]: " value
-                apply_kcc_tuning "$shift" "$value" "$scale"
+                apply_kcc_tuning "$kf_enable" "$discount_num" "$discount_den" "$kf_steady_new"
                 ;;
             3)
-                read -r -p "请输入缩放值 [64-1048576，必须为 2 次幂]: " value
-                apply_kcc_tuning "$shift" "$min_rtt_us" "$value"
+                apply_kcc_tuning 1 35 100 1
                 ;;
             4)
-                apply_kcc_tuning "$KCC_DRAIN_SKIP_MIN_RTT_SHIFT" "$KCC_DRAIN_SKIP_MIN_RTT_US" "$KCC_SCALE"
+                apply_kcc_tuning 1 50 100 1
+                ;;
+            5)
+                apply_kcc_tuning 1 75 100 1
+                ;;
+            6)
+                apply_kcc_tuning 0 50 100 0
+                ;;
+            7)
+                apply_kcc_tuning "$KCC_KF_ENABLE" "$KCC_KF_DISCOUNT_NUM" "$KCC_KF_DISCOUNT_DEN" "$KCC_KF_STEADY_MODE"
                 ;;
             0)
                 return 0
@@ -1593,11 +1649,12 @@ archive_conflicting_sysctl_configs() {
 
 # 生成sysctl配置并应用
 generate_sysctl_conf() {
-    local kcc_drain_shift kcc_drain_min_rtt_us kcc_scale MIN_FREE_KBYTES
+    local kf_enable kf_discount_num kf_discount_den kf_steady MIN_FREE_KBYTES
 
-    kcc_drain_shift=$(get_kcc_effective_value kcc_drain_skip_min_rtt_shift "$KCC_DRAIN_SKIP_MIN_RTT_SHIFT")
-    kcc_drain_min_rtt_us=$(get_kcc_effective_value kcc_drain_skip_min_rtt_us "$KCC_DRAIN_SKIP_MIN_RTT_US")
-    kcc_scale=$(get_kcc_effective_value kcc_scale "$KCC_SCALE")
+    kf_enable=$(get_kcc_effective_value kcc_kf_enable "$KCC_KF_ENABLE")
+    kf_discount_num=$(get_kcc_effective_value kcc_kf_discount_num "$KCC_KF_DISCOUNT_NUM")
+    kf_discount_den=$(get_kcc_effective_value kcc_kf_discount_den "$KCC_KF_DISCOUNT_DEN")
+    kf_steady=$(get_kcc_effective_value kcc_kf_steady_mode "$KCC_KF_STEADY_MODE")
 
     MIN_FREE_KBYTES=$(awk '/MemTotal/ {printf "%d", $2 * 0.005}' /proc/meminfo 2>/dev/null || echo 65536)
 
@@ -1705,9 +1762,10 @@ net.core.default_qdisc = $qdisc
 net.ipv4.tcp_congestion_control = $congestion_control
 EOF
     cat >> "$SYSCTL_CONF" << EOF
-net.kcc.kcc_drain_skip_min_rtt_shift = $kcc_drain_shift
-net.kcc.kcc_drain_skip_min_rtt_us = $kcc_drain_min_rtt_us
-net.kcc.kcc_scale = $kcc_scale
+net.kcc.kcc_kf_enable = $kf_enable
+net.kcc.kcc_kf_steady_mode = $kf_steady
+net.kcc.kcc_kf_discount_num = $kf_discount_num
+net.kcc.kcc_kf_discount_den = $kf_discount_den
 EOF
     remove_legacy_sysctl_overrides
     archive_conflicting_sysctl_configs
