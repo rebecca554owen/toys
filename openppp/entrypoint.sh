@@ -43,12 +43,39 @@ if [ "$ENABLE_BYPASS" = "true" ]; then
     bypass_refresh=${BYPASS_REFRESH:-true}
     bypass_pull_on_start=${BYPASS_PULL_ON_START:-true}
     bypass_pull_arg="${bypass_iplist_path}<${bypass_country}"
+    bypass_pull_mux_mode=
+    bypass_pull_mux_mode_next=false
+
+    for arg in "$@"; do
+        if [ "$bypass_pull_mux_mode_next" = "true" ]; then
+            bypass_pull_mux_mode="$arg"
+            break
+        fi
+
+        case "$arg" in
+            --mux-mode=*)
+                bypass_pull_mux_mode=${arg#--mux-mode=}
+                break
+                ;;
+            --mux-mode)
+                bypass_pull_mux_mode_next=true
+                ;;
+        esac
+    done
 
     mkdir -p "$(dirname "$bypass_iplist_path")"
 
     if [ "$bypass_pull_on_start" = "true" ] || [ ! -s "$bypass_iplist_path" ]; then
         echo "自动分流: 拉取 ${bypass_country} IP 列表到 ${bypass_iplist_path}"
-        if ! "$ppp_bin" --pull-iplist "$bypass_pull_arg"; then
+        if [ -n "$bypass_pull_mux_mode" ]; then
+            "$ppp_bin" "--mux-mode=${bypass_pull_mux_mode}" --pull-iplist "$bypass_pull_arg"
+            bypass_pull_status=$?
+        else
+            "$ppp_bin" --pull-iplist "$bypass_pull_arg"
+            bypass_pull_status=$?
+        fi
+
+        if [ "$bypass_pull_status" -ne 0 ]; then
             echo "自动分流: IP 列表拉取失败，继续启动"
         fi
     fi
