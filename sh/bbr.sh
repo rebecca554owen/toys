@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.6.2"
+SCRIPT_VERSION="1.6.3"
 set -euo pipefail
 
 SYSCTL_CONF="/etc/sysctl.d/99-bbr-kcc.conf"
@@ -20,8 +20,9 @@ congestion_control="kcc"
 KCC_KF_ENABLE=1
 KCC_KF_DISCOUNT_NUM=50
 KCC_KF_DISCOUNT_DEN=100
-KCC_KF_STEADY_MODE=1
-KCC_INJECTION_DIVISOR=2.885
+KCC_KF_MODE=1
+KCC_PACING_INIT_GAIN=739
+KCC_PACING_GAIN_SCALE=256
 
 # Temp file tracking for cleanup on unexpected exit
 TEMP_FILES=()
@@ -1116,7 +1117,8 @@ format_kcc_injection_percent() {
         return 0
     fi
 
-    awk -v num="$num" -v den="$den" -v div="$KCC_INJECTION_DIVISOR" 'BEGIN { printf "%.1f%%", (num / den / div) * 100 }'
+    awk -v num="$num" -v den="$den" -v gain="$KCC_PACING_INIT_GAIN" -v scale="$KCC_PACING_GAIN_SCALE" \
+        'BEGIN { printf "%.1f%%", (num / den * scale / gain) * 100 }'
 }
 
 format_kcc_enabled_label() {
@@ -1173,17 +1175,17 @@ get_kcc_effective_value() {
 }
 
 show_kcc_tuning_status() {
-    local kf_enable discount_num discount_den kf_steady inactive_note=""
+    local kf_enable discount_num discount_den kf_mode inactive_note=""
 
     kf_enable=$(get_kcc_effective_value kcc_kf_enable "$KCC_KF_ENABLE")
     discount_num=$(get_kcc_effective_value kcc_kf_discount_num "$KCC_KF_DISCOUNT_NUM")
     discount_den=$(get_kcc_effective_value kcc_kf_discount_den "$KCC_KF_DISCOUNT_DEN")
-    kf_steady=$(get_kcc_effective_value kcc_kf_steady_mode "$KCC_KF_STEADY_MODE")
+    kf_mode=$(get_kcc_effective_value kcc_kf_mode "$KCC_KF_MODE")
     [ "$kf_enable" = "1" ] || inactive_note="（未生效）"
 
     echo "====== KCC 2.0 参数 ======"
     echo "跨连接 KF 注入: $(format_kcc_enabled_label "$kf_enable")"
-    echo "稳态峰值: $(format_kcc_enabled_label "$kf_steady")$inactive_note"
+    echo "单调峰值模式: $(format_kcc_enabled_label "$kf_mode")$inactive_note"
     echo "甜点速度: $discount_num/$discount_den = $(format_kcc_gain "$discount_num" "$discount_den")；预计初始注入 fair-share × $(format_kcc_injection_percent "$discount_num" "$discount_den")$inactive_note"
     echo "部署限制: KF 注入仅适合共享同一瓶颈路径的单宿主环境"
     echo "====================="
@@ -1420,7 +1422,8 @@ remove_obsolete_kcc_sysctl_values() {
         key == "net.kcc.kcc_drain_skip_min_rtt_shift" ||
         key == "net.kcc.kcc_drain_skip_min_rtt_us" ||
         key == "net.kcc.kcc_scale" ||
-        key == "net.kcc.kcc_rtt_mode" { next }
+        key == "net.kcc.kcc_rtt_mode" ||
+        key == "net.kcc.kcc_kf_steady_mode" { next }
         { print }
     ' "$SYSCTL_CONF" > "$tmp_file" || {
         rm -f "$tmp_file"
@@ -1435,20 +1438,20 @@ persist_kcc_tuning() {
     local kf_enable=$1
     local discount_num=$2
     local discount_den=$3
-    local kf_steady=$4
+    local kf_mode=$4
 
     remove_obsolete_kcc_sysctl_values || return 1
     write_sysctl_conf_value net.kcc.kcc_kf_enable "$kf_enable" || return 1
     write_sysctl_conf_value net.kcc.kcc_kf_discount_num "$discount_num" || return 1
     write_sysctl_conf_value net.kcc.kcc_kf_discount_den "$discount_den" || return 1
-    write_sysctl_conf_value net.kcc.kcc_kf_steady_mode "$kf_steady" || return 1
+    write_sysctl_conf_value net.kcc.kcc_kf_mode "$kf_mode" || return 1
 }
 
 apply_kcc_tuning_runtime() {
     local kf_enable=$1
     local discount_num=$2
     local discount_den=$3
-    local kf_steady=$4
+    local kf_mode=$4
 
     if ! ensure_congestion_control_available kcc; then
         echo "KCC 未安装或未加载，当前只完成持久化配置。"
@@ -1472,7 +1475,7 @@ apply_kcc_tuning_runtime() {
         "net.kcc.kcc_kf_enable=$kf_enable" \
         "net.kcc.kcc_kf_discount_num=$discount_num" \
         "net.kcc.kcc_kf_discount_den=$discount_den" \
-        "net.kcc.kcc_kf_steady_mode=$kf_steady"; then
+        "net.kcc.kcc_kf_mode=$kf_mode"; then
         echo "KCC 2.0 运行时参数已生效。"
     else
         echo "KCC 2.0 运行时参数写入失败；持久化配置已保留。"
@@ -1483,38 +1486,38 @@ apply_kcc_tuning() {
     local kf_enable=$1
     local discount_num=$2
     local discount_den=$3
-    local kf_steady=$4
+    local kf_mode=$4
 
     require_linux || return 1
     require_root || return 1
 
     if ! is_non_negative_integer "$kf_enable" || [ "$kf_enable" -gt 1 ] || \
-        ! is_non_negative_integer "$kf_steady" || [ "$kf_steady" -gt 1 ] || \
+        ! is_non_negative_integer "$kf_mode" || [ "$kf_mode" -gt 1 ] || \
         ! is_positive_integer "$discount_num" || [ "$discount_num" -gt 10000 ] || \
         ! is_positive_integer "$discount_den" || [ "$discount_den" -gt 10000 ]; then
         echo "KCC 参数格式不正确。"
         return 1
     fi
 
-    persist_kcc_tuning "$kf_enable" "$discount_num" "$discount_den" "$kf_steady" || {
+    persist_kcc_tuning "$kf_enable" "$discount_num" "$discount_den" "$kf_mode" || {
         echo "写入 $SYSCTL_CONF 持久配置失败"
         return 1
     }
     echo "KCC 参数已持久化到 $SYSCTL_CONF"
 
-    apply_kcc_tuning_runtime "$kf_enable" "$discount_num" "$discount_den" "$kf_steady"
+    apply_kcc_tuning_runtime "$kf_enable" "$discount_num" "$discount_den" "$kf_mode"
     show_kcc_tuning_status
 }
 
 kcc_tuning_menu() {
-    local choice kf_enable kf_enable_new kf_enable_label kf_steady kf_steady_new kf_steady_label
+    local choice kf_enable kf_enable_new kf_enable_label kf_mode kf_mode_new kf_mode_label
     local discount_num discount_den
 
     while true; do
         kf_enable=$(get_kcc_effective_value kcc_kf_enable "$KCC_KF_ENABLE")
         discount_num=$(get_kcc_effective_value kcc_kf_discount_num "$KCC_KF_DISCOUNT_NUM")
         discount_den=$(get_kcc_effective_value kcc_kf_discount_den "$KCC_KF_DISCOUNT_DEN")
-        kf_steady=$(get_kcc_effective_value kcc_kf_steady_mode "$KCC_KF_STEADY_MODE")
+        kf_mode=$(get_kcc_effective_value kcc_kf_mode "$KCC_KF_MODE")
         if [ "$kf_enable" = "1" ]; then
             kf_enable_label="启用 → 切换禁用"
             kf_enable_new=0
@@ -1522,25 +1525,25 @@ kcc_tuning_menu() {
             kf_enable_label="禁用 → 切换启用"
             kf_enable_new=1
         fi
-        if [ "$kf_steady" = "1" ]; then
-            kf_steady_label="启用 → 切换禁用"
-            kf_steady_new=0
+        if [ "$kf_mode" = "1" ]; then
+            kf_mode_label="启用 → 切换禁用"
+            kf_mode_new=0
         else
-            kf_steady_label="禁用 → 切换启用"
-            kf_steady_new=1
+            kf_mode_label="禁用 → 切换启用"
+            kf_mode_new=1
         fi
 
         echo "====== KCC 2.0 参数调优 ======"
         echo
         echo "说明:"
         echo "  kf_enable       跨连接带宽估计注入总开关，仅适合共享同一瓶颈路径的单宿主环境。"
-        echo "  kf_steady_mode  新连接使用已学习的单调峰值，稳定链路可减少冷启动慢热。"
+        echo "  kf_mode         启用后，新连接使用 KF 的单调峰值，稳定链路可减少冷启动慢热。"
         echo "  kf_discount     初始注入约为 discount / high_gain，源码默认 50/100。"
         echo
         show_kcc_runtime_overview
         echo
         echo "1. KF 注入：当前 $kf_enable_label"
-        echo "2. 稳态峰值：当前 $kf_steady_label"
+        echo "2. 单调峰值模式：当前 $kf_mode_label"
         echo "3. 保守预设：1,35/100,1，预计注入 fair-share × $(format_kcc_injection_percent 35 100)"
         echo "4. 默认甜点速度：1,50/100,1，预计注入 fair-share × $(format_kcc_injection_percent 50 100)"
         echo "5. 激进预设：1,75/100,1，预计注入 fair-share × $(format_kcc_injection_percent 75 100)"
@@ -1553,10 +1556,10 @@ kcc_tuning_menu() {
             "")
                 ;;
             1)
-                apply_kcc_tuning "$kf_enable_new" "$discount_num" "$discount_den" "$kf_steady"
+                apply_kcc_tuning "$kf_enable_new" "$discount_num" "$discount_den" "$kf_mode"
                 ;;
             2)
-                apply_kcc_tuning "$kf_enable" "$discount_num" "$discount_den" "$kf_steady_new"
+                apply_kcc_tuning "$kf_enable" "$discount_num" "$discount_den" "$kf_mode_new"
                 ;;
             3)
                 apply_kcc_tuning 1 35 100 1
@@ -1571,7 +1574,7 @@ kcc_tuning_menu() {
                 apply_kcc_tuning 0 50 100 0
                 ;;
             7)
-                apply_kcc_tuning "$KCC_KF_ENABLE" "$KCC_KF_DISCOUNT_NUM" "$KCC_KF_DISCOUNT_DEN" "$KCC_KF_STEADY_MODE"
+                apply_kcc_tuning "$KCC_KF_ENABLE" "$KCC_KF_DISCOUNT_NUM" "$KCC_KF_DISCOUNT_DEN" "$KCC_KF_MODE"
                 ;;
             0)
                 return 0
@@ -1649,12 +1652,12 @@ archive_conflicting_sysctl_configs() {
 
 # 生成sysctl配置并应用
 generate_sysctl_conf() {
-    local kf_enable kf_discount_num kf_discount_den kf_steady MIN_FREE_KBYTES
+    local kf_enable kf_discount_num kf_discount_den kf_mode MIN_FREE_KBYTES
 
     kf_enable=$(get_kcc_effective_value kcc_kf_enable "$KCC_KF_ENABLE")
     kf_discount_num=$(get_kcc_effective_value kcc_kf_discount_num "$KCC_KF_DISCOUNT_NUM")
     kf_discount_den=$(get_kcc_effective_value kcc_kf_discount_den "$KCC_KF_DISCOUNT_DEN")
-    kf_steady=$(get_kcc_effective_value kcc_kf_steady_mode "$KCC_KF_STEADY_MODE")
+    kf_mode=$(get_kcc_effective_value kcc_kf_mode "$KCC_KF_MODE")
 
     MIN_FREE_KBYTES=$(awk '/MemTotal/ {printf "%d", $2 * 0.005}' /proc/meminfo 2>/dev/null || echo 65536)
 
@@ -1763,7 +1766,7 @@ net.ipv4.tcp_congestion_control = $congestion_control
 EOF
     cat >> "$SYSCTL_CONF" << EOF
 net.kcc.kcc_kf_enable = $kf_enable
-net.kcc.kcc_kf_steady_mode = $kf_steady
+net.kcc.kcc_kf_mode = $kf_mode
 net.kcc.kcc_kf_discount_num = $kf_discount_num
 net.kcc.kcc_kf_discount_den = $kf_discount_den
 EOF
