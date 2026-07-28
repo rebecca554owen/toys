@@ -2,7 +2,7 @@
 # 系统优化脚本
 # 作者：周宇航
 
-SCRIPT_VERSION="1.6.3"
+SCRIPT_VERSION="1.6.4"
 set -euo pipefail
 
 SYSCTL_CONF="/etc/sysctl.d/99-bbr-kcc.conf"
@@ -14,6 +14,8 @@ KCC_REPO_URL="https://github.com/rebecca554owen/kcc.git"
 KCC_BRANCH="main"
 KCC_SRC_DIR="/usr/local/src/kcc"
 KCC_PATCH_DIR="$KCC_SRC_DIR/google/patch"
+PPP_SCRIPT_URL="${PPP_SCRIPT_URL:-https://raw.githubusercontent.com/rebecca554owen/toys/main/sh/ppp.sh}"
+PPP_DOWNLOADED_SCRIPT=""
 
 qdisc="cake"
 congestion_control="kcc"
@@ -1790,6 +1792,66 @@ restore_default_bbr() {
     apply_optimization "fq" "bbr"
 }
 
+download_ppp_script() {
+    local script_file
+    script_file=$(mktemp) || return 1
+    TEMP_FILES+=("$script_file")
+
+    if ! curl -fsSL --retry 2 "$PPP_SCRIPT_URL" -o "$script_file"; then
+        echo "无法下载 PPP 管理脚本: $PPP_SCRIPT_URL"
+        return 1
+    fi
+    chmod 700 "$script_file"
+    PPP_DOWNLOADED_SCRIPT="$script_file"
+}
+
+manage_ppp_update() {
+    local script_file status_output update_status
+
+    require_root || return 1
+    download_ppp_script || return 1
+    script_file="$PPP_DOWNLOADED_SCRIPT"
+    if ! status_output=$(bash "$script_file" --check-update); then
+        echo "获取 PPP 版本状态失败。"
+        return 1
+    fi
+
+    echo "====== PPP 版本状态 ======"
+    printf '%s\n' "$status_output"
+    echo "=========================="
+
+    update_status=$(printf '%s\n' "$status_output" | sed -n 's/^UPDATE_STATUS=//p' | tail -n1)
+    case "$update_status" in
+        update-available)
+            read -r -p "发现 PPP 更新，输入 yes 确认下载、替换并重启 PPP 服务: " confirm
+            if [ "$confirm" = "yes" ]; then
+                bash "$script_file" --update
+            else
+                echo "已取消 PPP 更新。"
+            fi
+            ;;
+        untracked)
+            echo "当前 PPP 是未追踪的旧版本；首次更新需要手动选择二进制变体。"
+            read -r -p "输入 yes 确认继续: " confirm
+            if [ "$confirm" = "yes" ]; then
+                bash "$script_file" --update
+            else
+                echo "已取消 PPP 更新。"
+            fi
+            ;;
+        up-to-date)
+            echo "PPP 已是最新版本。"
+            ;;
+        not-installed)
+            echo "未检测到 /opt/ppp/ppp；请通过 ppp.sh 安装 PPP。"
+            ;;
+        *)
+            echo "无法识别 PPP 更新状态。"
+            return 1
+            ;;
+    esac
+}
+
 # 菜单
 menu() {
     while true; do
@@ -1803,8 +1865,9 @@ menu() {
         echo "5. 查看详细状态"
         echo "6. 恢复默认 BBR (bbr + fq)"
         echo "7. 重启系统"
+        echo "8. 查看/更新 PPP"
         echo "0. 退出"
-        read -r -p "请输入选项 [0-7]，回车刷新: " option
+        read -r -p "请输入选项 [0-8]，回车刷新: " option
 
         case $option in
             "")
@@ -1829,6 +1892,9 @@ menu() {
                 ;;
             7)
                 require_root && systemctl reboot
+                ;;
+            8)
+                manage_ppp_update
                 ;;
             0)
                 exit 0
