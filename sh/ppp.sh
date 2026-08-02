@@ -4,6 +4,7 @@
 PPP_DIR="/opt/ppp"
 BACKUP_DIR="${PPP_DIR}/backup"
 CONFIG_FILE="${PPP_DIR}/appsettings.json"
+RELEASE_METADATA_FILE="${PPP_DIR}/.toys-release.json"
 SERVICE_FILE="/etc/systemd/system/ppp.service"
 GITHUB_REPO="rebecca554owen/toys"
 DEFAULT_CONFIG_URL="https://raw.githubusercontent.com/liulilittle/openppp2/main/appsettings.json"
@@ -13,6 +14,20 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
+SELECTED_ASSET=""
+
+function is_release_tag() {
+    [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
+function version_is_newer() {
+    local installed=$1
+    local available=$2
+
+    is_release_tag "$installed" && is_release_tag "$available" || return 1
+    [ "$installed" != "$available" ] || return 1
+    [ "$(printf '%s\n%s\n' "${installed#v}" "${available#v}" | sort -V | tail -n1)" = "${available#v}" ]
+}
 
 # 初始化系统信息
 function init_system_info() {
@@ -101,14 +116,91 @@ function check_io_uring_support() {
 
 # 获取最新版本
 function get_latest_version() {
-    local release_info=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest")
-    local latest_version=$(echo "$release_info" | jq -r '.tag_name')
+    local release_info
+    local latest_version
+    release_info=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest") || return 1
+    latest_version=$(echo "$release_info" | jq -r '.tag_name // empty')
 
-    if [ -z "$latest_version" ] || [ "$latest_version" == "null" ]; then
+    if ! is_release_tag "$latest_version"; then
+        echo -e "${RED}最新 release tag 无效: ${latest_version:-未提供}${NC}" >&2
         return 1
     fi
 
     echo "$latest_version"
+}
+
+function get_binary_version() {
+    [ -x "${PPP_DIR}/ppp" ] || return 1
+    "${PPP_DIR}/ppp" --help 2>/dev/null | sed -nE 's/^[[:space:]]*Version:[[:space:]]*(.*)[[:space:]]*$/\1/p' | head -n1
+}
+
+function get_metadata_value() {
+    local key=$1
+    [ -f "$RELEASE_METADATA_FILE" ] || return 1
+    jq -r --arg key "$key" '.[$key] // empty' "$RELEASE_METADATA_FILE" 2>/dev/null
+}
+
+function get_installed_tag() {
+    local tag
+    tag=$(get_binary_version || true)
+    if is_release_tag "$tag"; then
+        echo "$tag"
+        return 0
+    fi
+
+    tag=$(get_metadata_value tag || true)
+    if is_release_tag "$tag"; then
+        echo "$tag"
+        return 0
+    fi
+
+    return 1
+}
+
+function get_installed_asset() {
+    get_metadata_value asset || true
+}
+
+function write_release_metadata() {
+    local tag=$1
+    local asset=$2
+    local tmp_file
+
+    is_release_tag "$tag" || return 1
+    [ -n "$asset" ] || return 1
+    tmp_file=$(mktemp "${PPP_DIR}/.toys-release.json.XXXXXX") || return 1
+    if ! jq -n --arg tag "$tag" --arg asset "$asset" --arg installed_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+        '{tag: $tag, asset: $asset, installed_at: $installed_at}' > "$tmp_file"; then
+        rm -f "$tmp_file"
+        return 1
+    fi
+    chmod 600 "$tmp_file"
+    mv "$tmp_file" "$RELEASE_METADATA_FILE"
+}
+
+function print_update_status() {
+    local latest_version installed_tag installed_asset binary_version status
+
+    latest_version=$(get_latest_version) || return 1
+    installed_tag=$(get_installed_tag || true)
+    installed_asset=$(get_installed_asset)
+    binary_version=$(get_binary_version || true)
+
+    if [ ! -x "${PPP_DIR}/ppp" ]; then
+        status="not-installed"
+    elif ! is_release_tag "$installed_tag"; then
+        status="untracked"
+    elif version_is_newer "$installed_tag" "$latest_version"; then
+        status="update-available"
+    else
+        status="up-to-date"
+    fi
+
+    printf 'INSTALLED_TAG=%s\n' "${installed_tag:-unknown}"
+    printf 'INSTALLED_BINARY_VERSION=%s\n' "${binary_version:-unknown}"
+    printf 'INSTALLED_ASSET=%s\n' "${installed_asset:-unknown}"
+    printf 'LATEST_TAG=%s\n' "$latest_version"
+    printf 'UPDATE_STATUS=%s\n' "$status"
 }
 
 # 获取指定版本的 release 信息
@@ -116,9 +208,9 @@ function get_release_info() {
     local version=$1
 
     if [ "$version" == "latest" ] || [ "$version" == "$(get_latest_version)" ]; then
-        curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+        curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
     else
-        curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${version}"
+        curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${version}"
     fi
 }
 
@@ -166,17 +258,27 @@ function download_and_extract() {
     echo -e "${YELLOW}正在下载: ${download_url}${NC}"
     if ! wget -q --show-progress "$download_url" -O openppp2.zip; then
         echo -e "${RED}下载失败${NC}"
+        rm -f openppp2.zip
         return 1
     fi
     
     # 验证和解压
     if ! file openppp2.zip | grep -q "Zip archive data"; then
         echo -e "${RED}下载的文件不是有效的ZIP文件${NC}"
+        rm -f openppp2.zip
         return 1
     fi
     
     echo -e "${YELLOW}解压文件中...${NC}"
-    unzip -o openppp2.zip -x 'appsettings.json' && rm -f openppp2.zip
+    if ! unzip -o openppp2.zip -x 'appsettings.json'; then
+        rm -f openppp2.zip
+        return 1
+    fi
+    rm -f openppp2.zip
+    if [ ! -f ppp ]; then
+        echo -e "${RED}安装包中未找到 ppp 可执行文件${NC}"
+        return 1
+    fi
     chmod +x ppp
     
     return 0
@@ -324,8 +426,26 @@ function select_download_version() {
         fi
     fi
 
-    download_and_extract "$version" "$selected_asset"
-    return $?
+    if ! download_and_extract "$version" "$selected_asset"; then
+        return 1
+    fi
+
+    SELECTED_ASSET="$selected_asset"
+    return 0
+}
+
+function download_selected_asset() {
+    local version=$1
+    local asset=$2
+
+    if [ -z "$asset" ]; then
+        return 1
+    fi
+    if [[ "$asset" == *"-tc"* ]]; then
+        ensure_libbpf0_compat || return 1
+    fi
+    download_and_extract "$version" "$asset" || return 1
+    SELECTED_ASSET="$asset"
 }
 
 # 配置系统服务
@@ -382,10 +502,23 @@ function backup_ppp() {
     # 创建新的backup文件夹
     mkdir -p "$BACKUP_DIR"
 
-    # 复制 ppp和配置文件 到备份目录
-    cp ppp "$CONFIG_FILE" "$BACKUP_DIR"
+    # 复制可执行文件、配置和版本元数据到备份目录。
+    cp -a ppp "$BACKUP_DIR" || return 1
+    [ ! -f "$CONFIG_FILE" ] || cp -a "$CONFIG_FILE" "$BACKUP_DIR" || return 1
+    [ ! -f "$RELEASE_METADATA_FILE" ] || cp -a "$RELEASE_METADATA_FILE" "$BACKUP_DIR" || return 1
 
     echo -e "${GREEN}已备份当前目录到: ${BACKUP_DIR}${NC}"
+}
+
+function restore_ppp_backup() {
+    [ -f "$BACKUP_DIR/ppp" ] || return 1
+    cp -a "$BACKUP_DIR/ppp" "$PPP_DIR/" || return 1
+    [ ! -f "$BACKUP_DIR/appsettings.json" ] || cp -a "$BACKUP_DIR/appsettings.json" "$PPP_DIR/" || return 1
+    if [ -f "$BACKUP_DIR/.toys-release.json" ]; then
+        cp -a "$BACKUP_DIR/.toys-release.json" "$PPP_DIR/"
+    else
+        rm -f "$RELEASE_METADATA_FILE"
+    fi
 }
 
 # 下载默认配置
@@ -509,6 +642,11 @@ function install_ppp() {
     local version
     read -p "输入要安装的版本 (回车使用最新版本): " version
     version=${version:-$latest_version}
+
+    if ! is_release_tag "$version"; then
+        echo -e "${RED}版本格式无效，应为 v<major>.<minor>.<patch>${NC}"
+        return 1
+    fi
     
     # 选择模式
     echo -e "\n${GREEN}请选择运行模式:${NC}"
@@ -545,7 +683,14 @@ function install_ppp() {
     
     # 启动服务
     systemctl enable ppp.service
-    systemctl start ppp.service
+    if ! systemctl start ppp.service; then
+        echo -e "${RED}PPP 服务启动失败，未写入版本元数据${NC}"
+        return 1
+    fi
+    if ! write_release_metadata "$version" "$SELECTED_ASSET"; then
+        echo -e "${RED}无法写入 PPP 版本元数据${NC}"
+        return 1
+    fi
     
     echo -e "${GREEN}PPP ${mode} 安装完成!${NC}"
 }
@@ -601,6 +746,10 @@ function manage_service() {
 
 # 更新PPP
 function update_ppp() {
+    local requested_version=${1:-latest}
+    local prompt_for_version=${2:-true}
+    local latest_version version selected_asset installed_tag
+
     echo -e "${YELLOW}更新PPP...${NC}"
     
     if [ ! -d "$PPP_DIR" ]; then
@@ -612,34 +761,80 @@ function update_ppp() {
     
     # 获取最新版本号
     echo -e "${YELLOW}获取最新版本信息...${NC}"
-    local latest_version=$(get_latest_version)
+    latest_version=$(get_latest_version)
     if [ -z "$latest_version" ]; then
         echo -e "${RED}获取最新版本失败${NC}"
         return 1
     fi
 
     echo -e "${GREEN}最新版本: ${latest_version}${NC}"
-    
-    local version
-    read -p "输入要更新的版本 (回车使用最新版本): " version
-    version=${version:-$latest_version}
+
+    if [ "$requested_version" = "latest" ]; then
+        version="$latest_version"
+    else
+        version="$requested_version"
+    fi
+
+    if [ "$prompt_for_version" = "true" ]; then
+        read -p "输入要更新的版本 (回车使用最新版本): " requested_version
+        version=${requested_version:-$latest_version}
+    fi
+
+    if ! is_release_tag "$version"; then
+        echo -e "${RED}版本格式无效，应为 v<major>.<minor>.<patch>${NC}"
+        return 1
+    fi
+
+    installed_tag=$(get_installed_tag || true)
+    if is_release_tag "$installed_tag" && ! version_is_newer "$installed_tag" "$version"; then
+        echo -e "${GREEN}当前 PPP 已是 ${installed_tag}，不执行降级或重复更新${NC}"
+        return 0
+    fi
     
     # 停止服务
-    systemctl stop ppp.service
+    if ! systemctl stop ppp.service; then
+        echo -e "${RED}PPP 服务停止失败${NC}"
+        return 1
+    fi
 
     # 备份当前版本
-    backup_ppp
+    if ! backup_ppp; then
+        echo -e "${RED}备份当前 PPP 失败${NC}"
+        systemctl start ppp.service || true
+        return 1
+    fi
 
     # 下载新版本
-    if ! select_download_version "$version" "$(check_io_uring_support && echo true || echo false)"; then
+    selected_asset=$(get_installed_asset)
+    if [ -n "$selected_asset" ]; then
+        echo -e "${YELLOW}复用已选择的安装包: ${selected_asset}${NC}"
+        if ! download_selected_asset "$version" "$selected_asset"; then
+            echo -e "${RED}更新失败, 已恢复备份${NC}"
+            restore_ppp_backup || true
+            systemctl start ppp.service || true
+            return 1
+        fi
+    elif ! select_download_version "$version" "$(check_io_uring_support && echo true || echo false)"; then
         echo -e "${RED}更新失败, 已恢复备份${NC}"
-        cp -a "$BACKUP_DIR"/* "$PPP_DIR/"
-        systemctl start ppp.service
+        restore_ppp_backup || true
+        systemctl start ppp.service || true
         return 1
     fi
     
     # 启动服务
-    systemctl start ppp.service
+    if ! systemctl start ppp.service; then
+        echo -e "${RED}新版本服务启动失败, 已恢复备份${NC}"
+        restore_ppp_backup || true
+        systemctl start ppp.service || true
+        return 1
+    fi
+    if ! write_release_metadata "$version" "$SELECTED_ASSET"; then
+        echo -e "${RED}无法写入 PPP 版本元数据, 已恢复备份${NC}"
+        systemctl stop ppp.service || true
+        restore_ppp_backup || true
+        systemctl start ppp.service || true
+        return 1
+    fi
     
     echo -e "${GREEN}PPP已更新到 ${version}${NC}"
 }
@@ -932,14 +1127,49 @@ function show_menu() {
     done
 }
 
-# 主入口
-clear
-# 检查root权限
-if [ "$(id -u)" -ne 0 ]; then
-    echo -e "${RED}错误: 此脚本需要root权限${NC}"
-    exit 1
+function show_usage() {
+    cat <<'EOF'
+用法:
+  ppp.sh                 打开交互式 PPP 管理菜单
+  ppp.sh --check-update  输出已安装和最新 release 的版本状态
+  ppp.sh --update        更新至最新 release；首次更新旧安装时选择二进制变体
+EOF
+}
+
+function main() {
+    case "${1:-}" in
+        --check-update)
+            print_update_status
+            ;;
+        --update)
+            if [ "$(id -u)" -ne 0 ]; then
+                echo -e "${RED}错误: 此操作需要 root 权限${NC}"
+                return 1
+            fi
+            init_system_info
+            update_ppp latest false
+            ;;
+        --help|-h)
+            show_usage
+            ;;
+        "")
+            clear
+            if [ "$(id -u)" -ne 0 ]; then
+                echo -e "${RED}错误: 此脚本需要root权限${NC}"
+                return 1
+            fi
+            echo -e "${GREEN}PPP2 管理脚本 版本: ${NC}${RED} v1.1.0 ${NC}"
+            echo -e "${GREEN}作者: 周宇航${NC}"
+            init_system_info
+            show_menu
+            ;;
+        *)
+            show_usage
+            return 1
+            ;;
+    esac
+}
+
+if [ "${PPP_SKIP_MAIN:-0}" != "1" ]; then
+    main "$@"
 fi
-echo -e "${GREEN}PPP2 管理脚本 版本: ${NC}${RED} v1.0.3 ${NC}"
-echo -e "${GREEN}作者: 周宇航${NC}"
-init_system_info
-show_menu

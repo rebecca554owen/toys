@@ -82,9 +82,8 @@ jobs:
       id: get-tag
       run: |
         TAG="${{ github.event.inputs.tag || github.ref_name }}"
-        DATE=$(TZ='Asia/Shanghai' date +'%Y%m%d%H%M%S')
         echo "tag=${TAG}" >> $GITHUB_OUTPUT
-        echo "app_version=2.0.0.0-${DATE}" >> $GITHUB_OUTPUT
+        echo "app_version=${TAG}" >> $GITHUB_OUTPUT
 
     - name: Validate openppp2 tag
       run: |
