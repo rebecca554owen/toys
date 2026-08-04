@@ -6,7 +6,7 @@ on:
       tag:
         description: '输入 openppp2 的 tag 名称'
         required: true
-        default: 'v4.5.0'
+        default: 'v2.0.0'
   push:
     tags:
       - 'v*.*.*'
@@ -27,6 +27,7 @@ jobs:
 
     env:
       ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+      BOOST_VERSION: 1.86.0
 
     steps:
     - name: Checkout openppp2 repository
@@ -40,7 +41,7 @@ jobs:
       run: |
         sudo apt-get update -y
         sudo apt-get install -y --no-install-recommends \
-          build-essential cmake git zip unzip wget \
+          build-essential cmake git zip unzip curl \
           gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
     - name: Get openppp2 tag
@@ -71,10 +72,104 @@ jobs:
       run: |
         git clone --depth 1 https://github.com/liulilittle/openppp2-ubuntu-3rd-environment.git "$RUNNER_TEMP/3rd"
 
+    - name: Cache Boost for Linux aarch64
+      id: cache-boost
+      uses: actions/cache@v5
+      with:
+        path: ${{ github.workspace }}/third-party/boost-aarch64
+        key: linux-aarch64-boost-${{ env.BOOST_VERSION }}-gcc-cross-ubuntu22-v1
+
+    - name: Build Boost for Linux aarch64
+      if: steps.cache-boost.outputs.cache-hit != 'true'
+      run: |
+        set -euxo pipefail
+        boost_version_underscore="${BOOST_VERSION//./_}"
+        boost_root="$GITHUB_WORKSPACE/third-party/boost-aarch64"
+        archive="$RUNNER_TEMP/boost_${boost_version_underscore}.tar.gz"
+
+        mkdir -p "$GITHUB_WORKSPACE/third-party"
+        curl -L --fail --retry 5 \
+          -o "$archive" \
+          "https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${boost_version_underscore}.tar.gz"
+        rm -rf "$boost_root" "$RUNNER_TEMP/boost_${boost_version_underscore}"
+        tar -xzf "$archive" -C "$RUNNER_TEMP"
+        mv "$RUNNER_TEMP/boost_${boost_version_underscore}" "$boost_root"
+
+        user_config="$RUNNER_TEMP/boost-user-config.jam"
+        cat > "$user_config" <<'EOF'
+        using gcc : aarch64 : aarch64-linux-gnu-g++ :
+            <archiver>aarch64-linux-gnu-ar
+            <ranlib>aarch64-linux-gnu-ranlib
+        ;
+        EOF
+
+        cd "$boost_root"
+        ./bootstrap.sh
+        ./b2 -j"$(nproc)" \
+          --user-config="$user_config" \
+          --layout=system \
+          toolset=gcc-aarch64 \
+          target-os=linux \
+          binary-format=elf \
+          architecture=arm \
+          address-model=64 \
+          abi=aapcs \
+          context-impl=fcontext \
+          cxxflags=-fPIC \
+          link=static \
+          runtime-link=static \
+          threading=multi \
+          variant=release \
+          --with-system \
+          --with-coroutine \
+          --with-thread \
+          --with-context \
+          --with-regex \
+          --with-filesystem \
+          stage
+
+    - name: Use and verify Boost 1.86.0 for Linux aarch64
+      run: |
+        set -euxo pipefail
+        boost_root="$GITHUB_WORKSPACE/third-party/boost-aarch64"
+        target_boost="$RUNNER_TEMP/3rd/aarch64/boost"
+
+        grep -Eq '^#define BOOST_VERSION 108600$' \
+          "$boost_root/boost/version.hpp"
+        for lib in system coroutine thread context regex filesystem; do
+          archive="$boost_root/stage/lib/libboost_${lib}.a"
+          test -s "$archive"
+          test -n "$(aarch64-linux-gnu-ar t "$archive")"
+        done
+
+        object_name="$(aarch64-linux-gnu-ar t \
+          "$boost_root/stage/lib/libboost_context.a" | sed -n '1p')"
+        test -n "$object_name"
+        verify_dir="$(mktemp -d)"
+        (
+          cd "$verify_dir"
+          aarch64-linux-gnu-ar x \
+            "$boost_root/stage/lib/libboost_context.a" "$object_name"
+          aarch64-linux-gnu-readelf -h "$object_name" | \
+            grep -q 'Machine:.*AArch64'
+        )
+
+        nm_output="$(aarch64-linux-gnu-nm -g --defined-only \
+          "$boost_root/stage/lib/libboost_context.a")"
+        printf '%s\n' "$nm_output" | grep -Eq ' (make_fcontext)$'
+        printf '%s\n' "$nm_output" | grep -Eq ' (jump_fcontext)$'
+        printf '%s\n' "$nm_output" | grep -Eq ' (ontop_fcontext)$'
+
+        rm -rf "$target_boost"
+        ln -s "$boost_root" "$target_boost"
+
     - name: Build libunwind for target
       run: |
-        cd /tmp
-        wget -q https://github.com/libunwind/libunwind/releases/download/v1.8.1/libunwind-1.8.1.tar.gz
+        set -euxo pipefail
+        cd "$RUNNER_TEMP"
+        curl -L --fail --retry 5 \
+          -o libunwind-1.8.1.tar.gz \
+          https://github.com/libunwind/libunwind/releases/download/v1.8.1/libunwind-1.8.1.tar.gz
         tar xf libunwind-1.8.1.tar.gz
         cd libunwind-1.8.1
         ./configure --host=aarch64-linux-gnu --prefix="$RUNNER_TEMP/libunwind" --disable-shared --enable-static
