@@ -24,9 +24,10 @@ function version_is_newer() {
     local installed=$1
     local available=$2
 
+    # Tag 不同即视为可更新（不比较数值大小）。版本线可能切换
+    # （例如 v6.x → v2.1.x），数值比较会把合法升级误判为"降级"。
     is_release_tag "$installed" && is_release_tag "$available" || return 1
-    [ "$installed" != "$available" ] || return 1
-    [ "$(printf '%s\n%s\n' "${installed#v}" "${available#v}" | sort -V | tail -n1)" = "${available#v}" ]
+    [ "$installed" != "$available" ]
 }
 
 # 初始化系统信息
