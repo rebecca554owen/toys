@@ -35,7 +35,7 @@ jobs:
         with:
           repository: rebecca554owen/openppp2
           path: openppp2
-                    ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: "${{ github.event.inputs.tag || github.ref_name }}"
 
       - name: Show runner architecture
         run: |
