@@ -47,7 +47,7 @@ jobs:
         with:
           repository: rebecca554owen/openppp2
           path: openppp2
-                    ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: "${{ github.event.inputs.tag || github.ref_name }}"
 
       - name: Cache Android NDK
         id: cache-android-ndk
@@ -305,7 +305,7 @@ jobs:
         with:
           repository: rebecca554owen/openppp2
           path: openppp2
-                    ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: "${{ github.event.inputs.tag || github.ref_name }}"
 
       - name: Download macOS .so artifacts
         uses: actions/download-artifact@v8
