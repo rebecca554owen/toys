@@ -11,8 +11,6 @@ on:
     workflows:
       - build-openppp2-linux-amd64
       - build-openppp2-linux-arm64
-      - build-openppp2-macos-arm64
-      - build-openppp2-android-apk
     types:
       - completed
     branches:
