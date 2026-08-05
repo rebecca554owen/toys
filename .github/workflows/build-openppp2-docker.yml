@@ -7,6 +7,16 @@ on:
         description: 'Release tag，如 v1.0.0'
         required: true
         default: 'v2.0.0'
+  workflow_run:
+    workflows:
+      - build-openppp2-linux-amd64
+      - build-openppp2-linux-arm64
+      - build-openppp2-macos-arm64
+      - build-openppp2-android-apk
+    types:
+      - completed
+    branches:
+      - v*
 
 env:
   REGISTRY: ghcr.io
@@ -45,7 +55,11 @@ jobs:
       - name: Get tag
         id: get-tag
         run: |
-          echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.event.workflow_run.head_branch }}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Validate Docker tag
         run: |
