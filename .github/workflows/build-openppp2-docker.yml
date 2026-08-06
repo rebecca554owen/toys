@@ -7,6 +7,14 @@ on:
         description: 'Release tag，如 v1.0.0'
         required: true
         default: 'v2.0.0'
+      arch:
+        description: '发布架构：amd64（默认）或 all（amd64+arm64）'
+        required: false
+        default: 'amd64'
+        type: choice
+        options:
+          - amd64
+          - all
   workflow_run:
     workflows:
       - build-openppp2-linux-amd64
@@ -21,12 +29,27 @@ env:
   IMAGE_NAME: ${{ github.repository_owner }}/openppp2
 
 jobs:
+  prep:
+    runs-on: ubuntu-22.04
+    outputs:
+      platforms: ${{ steps.set-platforms.outputs.platforms }}
+    steps:
+      - name: Determine platforms
+        id: set-platforms
+        run: |
+          if [ "${{ github.event.inputs.arch }}" = "all" ]; then
+            echo 'platforms=["linux/amd64","linux/arm64"]' >> $GITHUB_OUTPUT
+          else
+            echo 'platforms=["linux/amd64"]' >> $GITHUB_OUTPUT
+          fi
+
   build:
     runs-on: ubuntu-24.04
+    needs: prep
     strategy:
       fail-fast: false
       matrix:
-        platform: [linux/amd64, linux/arm64]
+        platform: ${{ fromJson(needs.prep.outputs.platforms) }}
         include:
           - platform: linux/amd64
             platform_name: linux-amd64
@@ -141,11 +164,14 @@ jobs:
           DOCKER_TAGS=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
           
           DIGEST_AMD64=$(cat linux-amd64 | tr -d '"')
-          DIGEST_ARM64=$(cat linux-arm64 | tr -d '"')
-
           docker buildx imagetools create $DOCKER_TAGS \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@$DIGEST_AMD64 \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@$DIGEST_ARM64
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@$DIGEST_AMD64
+
+          if [ -f linux-arm64 ]; then
+            DIGEST_ARM64=$(cat linux-arm64 | tr -d '"')
+            docker buildx imagetools create --append $DOCKER_TAGS \
+              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@$DIGEST_ARM64
+          fi
       
       - name: Inspect image
         run: |
