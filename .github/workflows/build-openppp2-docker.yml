@@ -32,15 +32,15 @@ jobs:
   prep:
     runs-on: ubuntu-22.04
     outputs:
-      platforms: ${{ steps.set-platforms.outputs.platforms }}
+      matrix: ${{ steps.set-platforms.outputs.matrix }}
     steps:
       - name: Determine platforms
         id: set-platforms
         run: |
           if [ "${{ github.event.inputs.arch }}" = "all" ]; then
-            echo 'platforms=["linux/amd64","linux/arm64"]' >> $GITHUB_OUTPUT
+            echo 'matrix=[{"platform":"linux/amd64","platform_name":"linux-amd64"},{"platform":"linux/arm64","platform_name":"linux-arm64"}]' >> $GITHUB_OUTPUT
           else
-            echo 'platforms=["linux/amd64"]' >> $GITHUB_OUTPUT
+            echo 'matrix=[{"platform":"linux/amd64","platform_name":"linux-amd64"}]' >> $GITHUB_OUTPUT
           fi
 
   build:
@@ -49,12 +49,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: ${{ fromJson(needs.prep.outputs.platforms) }}
-        include:
-          - platform: linux/amd64
-            platform_name: linux-amd64
-          - platform: linux/arm64
-            platform_name: linux-arm64
+        include: ${{ fromJson(needs.prep.outputs.matrix) }}
 
     steps:
       - name: Checkout repository
