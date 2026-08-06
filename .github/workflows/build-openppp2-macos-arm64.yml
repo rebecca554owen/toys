@@ -54,8 +54,9 @@ jobs:
         id: get-tag
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          SHORT_SHA="$(git -C openppp2 rev-parse --short=7 HEAD 2>/dev/null || echo unknown)"
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "app_version=${TAG}" >> $GITHUB_OUTPUT
+          echo "app_version=${TAG}-${SHORT_SHA}" >> $GITHUB_OUTPUT
 
       - name: Validate openppp2 tag
         run: |
