@@ -3,6 +3,7 @@ FROM ubuntu:22.04 AS downloader
 
 # 构建参数
 ARG VERSION=latest
+ARG RELEASE_TS=0
 ARG TARGETARCH
 
 # 设置工作目录
@@ -19,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # 下载和准备二进制文件
 RUN set -ex && \
+    echo "${RELEASE_TS}" > /dev/null && \
     api_url="https://api.github.com/repos/rebecca554owen/toys/releases" && \
     if [ "${VERSION}" = "latest" ]; then \
         release_url="${api_url}/latest"; \
