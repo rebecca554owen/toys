@@ -22,7 +22,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   ANDROID_API: "21"
   BOOST_VERSION: "1.86.0"
-  OPENSSL_VERSION: "4.0.0"
+  OPENSSL_VERSION: "4.0.1"
 
 jobs:
   build-so:
@@ -35,7 +35,7 @@ jobs:
       ANDROID_ABI: ${{ matrix.ANDROID_ABI }}
       ANDROID_API: "21"
       BOOST_VERSION: "1.86.0"
-      OPENSSL_VERSION: "4.0.0"
+      OPENSSL_VERSION: "4.0.1"
     steps:
       - name: Checkout build recipes
         uses: actions/checkout@v6
