@@ -15,15 +15,6 @@ on:
         options:
           - amd64
           - all
-  workflow_run:
-    workflows:
-      - build-openppp2-linux-amd64
-      - build-openppp2-linux-arm64
-    types:
-      - completed
-    branches:
-      - v*
-
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/openppp2
@@ -71,11 +62,7 @@ jobs:
       - name: Get tag
         id: get-tag
         run: |
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${{ github.event.workflow_run.head_branch }}" >> $GITHUB_OUTPUT
-          fi
+          echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
 
       - name: Validate Docker tag
         run: |
@@ -135,11 +122,7 @@ jobs:
       - name: Get tag
         id: get-tag
         run: |
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${{ github.event.workflow_run.head_branch }}" >> $GITHUB_OUTPUT
-          fi
+          echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
 
       - name: Docker meta
         id: meta
