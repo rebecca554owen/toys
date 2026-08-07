@@ -15,7 +15,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: build-openppp2-android-apk-${{ github.ref }}
+  group: build-openppp2-android-apk-${{ github.event.inputs.tag || github.ref }}
   cancel-in-progress: true
 
 env:
