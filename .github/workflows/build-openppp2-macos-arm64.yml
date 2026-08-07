@@ -15,7 +15,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: build-openppp2-macos-arm64-${{ github.ref }}
+  group: build-openppp2-macos-arm64-${{ github.event.inputs.tag || github.ref }}
   cancel-in-progress: true
 
 env:
