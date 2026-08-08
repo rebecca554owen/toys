@@ -620,6 +620,20 @@ function init_config() {
         fi
         mv "${tmp_file}" "${CONFIG_FILE}"
     done
+
+    # UCP 与 transport-auth 仅在配置缺失时写默认值（//= 语义），
+    # 绝不覆盖已存在的配置：ucp 默认 0（禁用，避免与 udp.listen.port 同端口冲突），
+    # transport-auth 保持存量实例的 enabled 状态。
+    if ! jq --arg ucp_port "0" \
+        ".ucp.listen.port //= 0 |
+         .server[\"transport-auth\"].enabled //= false |
+         .client[\"transport-auth\"].enabled //= false" \
+        "${CONFIG_FILE}" > "${tmp_file}" 2>/dev/null; then
+        echo "设置 UCP/transport-auth 默认值失败"
+        rm -f "${tmp_file}"
+        return 1
+    fi
+    mv "${tmp_file}" "${CONFIG_FILE}"
 }
 
 # 安装PPP
@@ -1059,7 +1073,35 @@ function modify_config_item() {
 function select_crypto_algorithm() {
     local key_name=$1
     
-    # 显示提示信息
+    if [ "$key_name" = "transport" ]; then
+        # 新版 data path 使用 OpenSSL EVP AEAD（v2.2+），推荐 aes-256-gcm。
+        # AEAD key 固定 32 字节，aes-128/192-* 会被回退到 aes-256-gcm。
+        echo -e "\n${GREEN}选择 $key_name 加密算法:${NC}" >&2
+        echo "1) aes-256-gcm（推荐，EVP AEAD 数据面）" >&2
+        echo "2) aes-128-cfb" >&2
+        echo "3) aes-256-cfb" >&2
+        echo "4) simd-aes-128-cfb" >&2
+        echo "5) simd-aes-256-cfb" >&2
+
+        local choice
+        read -p "输入选择 (1-5)，默认 1: " choice
+        choice=${choice:-1}
+
+        case $choice in
+            1) echo "aes-256-gcm" ;;
+            2) echo "aes-128-cfb" ;;
+            3) echo "aes-256-cfb" ;;
+            4) echo "simd-aes-128-cfb" ;;
+            5) echo "simd-aes-256-cfb" ;;
+            *)
+                echo -e "${RED}无效选择，使用默认值 aes-256-gcm${NC}" >&2
+                echo "aes-256-gcm"
+                ;;
+        esac
+        return 0
+    fi
+
+    # key.protocol 保持原 SIMD/cfb 加密面
     echo -e "\n${GREEN}选择 $key_name 加密算法:${NC}" >&2
     echo "1) aes-128-cfb" >&2
     echo "2) aes-256-cfb" >&2
