@@ -621,11 +621,12 @@ function init_config() {
         mv "${tmp_file}" "${CONFIG_FILE}"
     done
 
-    # transport-auth 仅在配置缺失时写默认值（//= 语义），
-    # 绝不覆盖已存在的配置，保持存量实例的 enabled 状态。
+    # transport-auth 默认开启（仅写缺失项），
+    # 存量实例已显式配置 enabled 的保留原值（含 false，不能用 //=，jq 的 // 会把 false 当 falsy 覆盖）；
+    # 密钥由 ensure_transport_key 自动生成。
     if ! jq \
-        ".server[\"transport-auth\"].enabled //= false |
-         .client[\"transport-auth\"].enabled //= false" \
+        ".server[\"transport-auth\"].enabled = (if .server[\"transport-auth\"].enabled != null then .server[\"transport-auth\"].enabled else true end) |
+         .client[\"transport-auth\"].enabled = (if .client[\"transport-auth\"].enabled != null then .client[\"transport-auth\"].enabled else true end)" \
         "${CONFIG_FILE}" > "${tmp_file}" 2>/dev/null; then
         echo "设置 transport-auth 默认值失败"
         rm -f "${tmp_file}"
