@@ -621,19 +621,51 @@ function init_config() {
         mv "${tmp_file}" "${CONFIG_FILE}"
     done
 
-    # UCP 与 transport-auth 仅在配置缺失时写默认值（//= 语义），
-    # 绝不覆盖已存在的配置：ucp 默认 0（禁用，避免与 udp.listen.port 同端口冲突），
-    # transport-auth 保持存量实例的 enabled 状态。
-    if ! jq --arg ucp_port "0" \
-        ".ucp.listen.port //= 0 |
-         .server[\"transport-auth\"].enabled //= false |
+    # transport-auth 仅在配置缺失时写默认值（//= 语义），
+    # 绝不覆盖已存在的配置，保持存量实例的 enabled 状态。
+    if ! jq \
+        ".server[\"transport-auth\"].enabled //= false |
          .client[\"transport-auth\"].enabled //= false" \
         "${CONFIG_FILE}" > "${tmp_file}" 2>/dev/null; then
-        echo "设置 UCP/transport-auth 默认值失败"
+        echo "设置 transport-auth 默认值失败"
         rm -f "${tmp_file}"
         return 1
     fi
     mv "${tmp_file}" "${CONFIG_FILE}"
+
+    # transport-auth 启用时确保密钥文件存在
+    if ! ensure_transport_key; then
+        return 1
+    fi
+}
+
+# 确保 transport-auth 密钥文件存在（仅当 transport-auth 启用时）
+# openppp2 硬校验：64 个小写 hex 字符（读取时 Trim 尾部换行），文件权限 600。
+function ensure_transport_key() {
+    local ta_enabled
+    ta_enabled=$(jq -r '.server["transport-auth"].enabled // false' "$CONFIG_FILE" 2>/dev/null || echo false)
+    if [ "$ta_enabled" != "true" ]; then
+        return 0
+    fi
+
+    local key_file="${PPP_DIR}/secrets/transport.key"
+    local key_len
+    key_len=$(tr -d ' \t\r\n' < "$key_file" 2>/dev/null | wc -c | tr -d ' ')
+    if [ -f "$key_file" ] && [ "$key_len" = "64" ]; then
+        echo -e "${GREEN}transport-auth 密钥已存在: ${key_file}${NC}"
+        return 0
+    fi
+
+    echo -e "${YELLOW}transport-auth 已启用，生成密钥文件: ${key_file}${NC}"
+    mkdir -p "$(dirname "$key_file")"
+    if ! openssl rand -hex 32 > "$key_file" 2>/dev/null; then
+        echo -e "${RED}生成 transport-auth 密钥失败${NC}"
+        return 1
+    fi
+    chmod 600 "$key_file"
+    chown root:root "$key_file" 2>/dev/null || true
+    echo -e "${GREEN}已生成 transport-auth 密钥（64 字节 hex，权限 600）${NC}"
+    return 0
 }
 
 # 安装PPP
