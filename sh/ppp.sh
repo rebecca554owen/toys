@@ -302,81 +302,46 @@ function select_download_version() {
     fi
 
     # 根据架构确定可用版本。x86_64 优先推荐 TC 版本，客户端/服务端均可使用同一二进制。
+    # 资产命名模板: openppp2-{os}-{arch}[-{variant}...].zip（uname -m 直出架构名）
     if [ "$ARCH" == "x86_64" ]; then
-        local asset_name
-
-        asset_name=$(resolve_asset_name "$release_info" \
-            "openppp2-linux-amd64-tc-io-uring-simd.zip")
-        if [ -n "$asset_name" ]; then
-            choices+=("$asset_name")
-            labels+=("TC + IO_URING + SIMD 优化版（推荐）")
-        fi
-
-        asset_name=$(resolve_asset_name "$release_info" \
-            "openppp2-linux-amd64-tc-simd.zip")
-        if [ -n "$asset_name" ]; then
-            choices+=("$asset_name")
-            labels+=("TC + SIMD 优化版")
-        fi
-
-        asset_name=$(resolve_asset_name "$release_info" \
-            "openppp2-linux-amd64-tc-io-uring.zip")
-        if [ -n "$asset_name" ]; then
-            choices+=("$asset_name")
-            labels+=("TC + IO_URING 优化版")
-        fi
-
-        asset_name=$(resolve_asset_name "$release_info" \
-            "openppp2-linux-amd64-tc.zip")
-        if [ -n "$asset_name" ]; then
-            choices+=("$asset_name")
-            labels+=("TC 优化版")
-        fi
-
-        asset_name=$(resolve_asset_name "$release_info" \
-            "openppp2-linux-amd64-io-uring-simd.zip")
-        if [ -n "$asset_name" ]; then
-            choices+=("$asset_name")
-            labels+=("IO_URING + SIMD 优化版")
-        fi
-
-        asset_name=$(resolve_asset_name "$release_info" \
-            "openppp2-linux-amd64-simd.zip")
-        if [ -n "$asset_name" ]; then
-            choices+=("$asset_name")
-            labels+=("SIMD 优化版")
-        fi
-
-        asset_name=$(resolve_asset_name "$release_info" \
-            "openppp2-linux-amd64-io-uring.zip")
-        if [ -n "$asset_name" ]; then
-            choices+=("$asset_name")
-            labels+=("IO_URING 优化版")
-        fi
-
-        asset_name=$(resolve_asset_name "$release_info" \
-            "openppp2-linux-amd64.zip")
+        local prefix="openppp2-linux-amd64"
+        local variants=(
+            "tc-io-uring-simd:TC + IO_URING + SIMD 优化版（推荐）"
+            "tc-simd:TC + SIMD 优化版"
+            "tc-io-uring:TC + IO_URING 优化版"
+            "tc:TC 优化版"
+            "io-uring-simd:IO_URING + SIMD 优化版"
+            "simd:SIMD 优化版"
+            "io-uring:IO_URING 优化版"
+        )
+        local item variant label asset_name
+        for item in "${variants[@]}"; do
+            variant="${item%%:*}"
+            label="${item#*:}"
+            asset_name=$(resolve_asset_name "$release_info" "${prefix}-${variant}.zip")
+            if [ -n "$asset_name" ]; then
+                choices+=("$asset_name")
+                labels+=("$label")
+            fi
+        done
+        asset_name=$(resolve_asset_name "$release_info" "${prefix}.zip")
         if [ -n "$asset_name" ]; then
             choices+=("$asset_name")
             labels+=("标准版")
         fi
     elif [ "$ARCH" == "aarch64" ]; then
-        local standard_asset
-        local io_asset
+        local prefix="openppp2-linux-aarch64"
+        local asset_name
 
-        standard_asset=$(resolve_asset_name "$release_info" \
-            "openppp2-linux-aarch64.zip" \
-            "openppp2-linux-arm64.zip")
-        if [ -n "$standard_asset" ]; then
-            choices+=("$standard_asset")
+        asset_name=$(resolve_asset_name "$release_info" "${prefix}.zip")
+        if [ -n "$asset_name" ]; then
+            choices+=("$asset_name")
             labels+=("标准版")
         fi
 
-        io_asset=$(resolve_asset_name "$release_info" \
-            "openppp2-linux-aarch64-io-uring.zip" \
-            "openppp2-linux-arm64-io-uring.zip")
-        if [ -n "$io_asset" ]; then
-            choices+=("$io_asset")
+        asset_name=$(resolve_asset_name "$release_info" "${prefix}-io-uring.zip")
+        if [ -n "$asset_name" ]; then
+            choices+=("$asset_name")
             labels+=("IO_URING 优化版")
         fi
     else
