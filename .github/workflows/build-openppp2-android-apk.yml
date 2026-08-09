@@ -4,9 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '输入 openppp2 的 tag 名称'
-        required: true
-        default: 'v2.0.0'
+        description: '输入 openppp2 的 tag 名称（与 ref 二选一，tag 模式会更新 release 资产）'
+        required: false
+        default: ''
+      ref:
+        description: '输入 openppp2 的分支名或 commit（可选；指定后按 ref 构建验证，不更新 release）'
+        required: false
+        default: ''
   push:
     tags:
       - 'v*.*.*'
@@ -15,7 +19,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: build-openppp2-android-apk-${{ github.event.inputs.tag || github.ref }}
+  group: build-openppp2-android-apk-${{ github.event.inputs.ref || github.event.inputs.tag || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -47,7 +51,7 @@ jobs:
         with:
           repository: rebecca554owen/openppp2
           path: openppp2
-          ref: "${{ github.event.inputs.tag || github.ref_name }}"
+          ref: "${{ github.event.inputs.ref || github.event.inputs.tag || (github.event_name == 'workflow_dispatch' && 'dev') || github.ref_name }}"
 
       - name: Cache Android NDK
         id: cache-android-ndk
@@ -289,12 +293,23 @@ jobs:
       - name: Get openppp2 tag
         id: get-tag
         run: |
+          REF="${{ github.event.inputs.ref }}"
+          if [ -z "$REF" ] && [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -z "${{ github.event.inputs.tag }}" ]; then
+            REF="dev"
+          fi
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           SHORT_SHA="$(git -C openppp2 rev-parse --short=7 HEAD 2>/dev/null || echo unknown)"
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "app_version=${TAG}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          if [ -n "$REF" ]; then
+            echo "tag=${REF}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+            echo "app_version=${REF}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${TAG}" >> $GITHUB_OUTPUT
+            echo "app_version=${TAG}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          fi
+          echo "is_ref=${REF:+true}" >> $GITHUB_OUTPUT
 
       - name: Validate openppp2 tag
+        if: steps.get-tag.outputs.is_ref != 'true'
         run: |
           if [[ ! "${{ steps.get-tag.outputs.tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "错误：标签格式无效，应为v*.*.*"
@@ -306,7 +321,7 @@ jobs:
         with:
           repository: rebecca554owen/openppp2
           path: openppp2
-          ref: "${{ github.event.inputs.tag || github.ref_name }}"
+          ref: "${{ github.event.inputs.ref || github.event.inputs.tag || (github.event_name == 'workflow_dispatch' && 'dev') || github.ref_name }}"
 
       - name: Download macOS .so artifacts
         uses: actions/download-artifact@v8
@@ -399,6 +414,7 @@ jobs:
           echo "build_time=$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
+        if: steps.get-tag.outputs.is_ref != 'true'
         uses: ncipollo/release-action@v1
         with:
           tag: ${{ steps.get-tag.outputs.tag }}
