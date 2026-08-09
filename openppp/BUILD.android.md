@@ -20,7 +20,7 @@ description: 在 macOS 上本地编译并打包 openppp2 APK，以及 GitHub Act
 默认根目录：`~/Documents/GitHub/`
 
 - `openppp2` — 主仓库（C++ 源码 + Flutter Android 工程 + CMake）
-- `toys` — 构建脚本和 CI workflow（`toys/openppp/`）
+- `toys` — 本地构建脚本和编译文档（`toys/openppp/`）；CI/release 已统一到 openppp2 主仓库（`.github/workflows/`）
 - `key` — 签名材料（`app.key` + `key.properties`）
 
 > 假定仓库已就位。
