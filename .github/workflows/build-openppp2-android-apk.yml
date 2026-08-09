@@ -234,13 +234,6 @@ jobs:
           printf '%s\n' "$nm_output" | grep -Eq ' (jump_fcontext)$'
           printf '%s\n' "$nm_output" | grep -Eq ' (ontop_fcontext)$'
 
-      - name: Patch Android CMake for generated dependencies
-        run: |
-          set -euo pipefail
-          cp toys/openppp/android/CMakeLists.txt openppp2/android/CMakeLists.txt
-          grep -n "THIRD_PARTY_LIBRARY_DIR\|OPENPPP2_ANDROID_STATIC_LIBS\|CMAKE_CXX_STANDARD" \
-            openppp2/android/CMakeLists.txt
-
       - name: Build openppp2
         run: |
           set -euo pipefail
