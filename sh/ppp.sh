@@ -6,7 +6,7 @@ BACKUP_DIR="${PPP_DIR}/backup"
 CONFIG_FILE="${PPP_DIR}/appsettings.json"
 RELEASE_METADATA_FILE="${PPP_DIR}/.toys-release.json"
 SERVICE_FILE="/etc/systemd/system/ppp.service"
-GITHUB_REPO="rebecca554owen/toys"
+GITHUB_REPO="rebecca554owen/openppp2"
 DEFAULT_CONFIG_URL="https://raw.githubusercontent.com/liulilittle/openppp2/main/appsettings.json"
 
 # 颜色定义
