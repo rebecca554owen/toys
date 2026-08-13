@@ -429,7 +429,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--android-cmake", default=str(HOME / "Library/Android/sdk/cmake/3.22.1/bin/cmake"), help="Android SDK CMake 路径")
     parser.add_argument("--android-api", default="21", help="Android API level")
     parser.add_argument("--boost-version", default="1.86.0", help="Boost version")
-    parser.add_argument("--openssl-version", default="4.0.0", help="OpenSSL version")
+    parser.add_argument("--openssl-version", default="4.0.1", help="OpenSSL version")
     parser.add_argument("--jobs", default=None, help="并行任务数，默认 CPU 数")
     parser.add_argument("--log-dir", default=str(SCRIPT_DIR / "build/logs/android-local"), help="日志根目录")
     parser.add_argument("--keep-build", action="store_true", help="保留 CMake build 目录")
