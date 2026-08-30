@@ -1,33 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""ppp-macos-bench.py - PPP 链路压力测试
+"""ppp-bench.py - PPP 链路压力测试
 
 用法:
-  python3 ppp-macos-bench.py --rounds 5000 --size 1 \
-      --proxy http://127.0.0.1:7899 --host 192.168.100.10:8081
+  # 命令行
+  python3 ppp-bench.py --proxy http://127.0.0.1:7899 --host 192.168.100.10:8081 --rounds 100 --size 1
 
-默认:
-  --rounds 1000
-  --size 10
-  --proxy http://127.0.0.1:7899
-  --host 192.168.100.10:8081
+  # JSON stdin（更快）
+  echo '{"proxy":"http://127.0.0.1:7899","host":"192.168.100.10:8081","rounds":100,"size":1}' | python3 ppp-bench.py
+  python3 ppp-bench.py < params.json
+
+默认（无参数无 stdin）：
+  --rounds 1000 --size 10
+  --proxy http://127.0.0.1:7899 --host 192.168.100.10:8081
 """
 import argparse, json, statistics, sys, time
-
-def progress_bar(current, total, bar_len=40):
-    """Simple terminal progress bar."""
-    frac = current / total
-    filled = int(bar_len * frac)
-    bar = '=' * filled + '-' * (bar_len - filled)
-    pct = frac * 100
-    sys.stdout.write(f'\r[{bar}] {pct:5.1f}% {current}/{total}')
-    sys.stdout.flush()
 
 def curl_once(proxy, url, size_mb, timeout=30):
     """执行单次 curl 走代理，返回 (ok, bytes, time_s, exit_code)。"""
     import subprocess
     expected = size_mb * 1048576
-    cmd = ["curl", "-s", "-o", "/dev/null", "-m", str(timeout),
+    cmd = ["/usr/bin/curl", "-s", "-o", "/dev/null", "-m", str(timeout),
            "-w", "code=%{http_code} time=%{time_total} size=%{size_download}",
            "-x", proxy, url]
     try:
@@ -53,20 +46,34 @@ def main():
     ap.add_argument("--proxy", default="http://127.0.0.1:7899")
     ap.add_argument("--host", default="192.168.100.10:8081")
     ap.add_argument("--timeout", type=int, default=30)
-    ap.add_argument("--interval", type=int, default=100)
     ap.add_argument("--json", help="结果写 JSON 文件")
-    args = args = ap.parse_args()
+    args = ap.parse_args()
 
-    url = f"http://{args.host}/backend/garbage.php?ckSize={args.size}"
+    # JSON stdin 输入（覆盖命令行参数）
+    if not sys.stdin.isatty():
+        try:
+            stdin_data = json.load(sys.stdin)
+            if "rounds" in stdin_data: args.rounds = stdin_data["rounds"]
+            if "size" in stdin_data: args.size = stdin_data["size"]
+            if "proxy" in stdin_data: args.proxy = stdin_data["proxy"]
+            if "host" in stdin_data: args.host = stdin_data["host"]
+            if "timeout" in stdin_data: args.timeout = stdin_data["timeout"]
+            if "json" in stdin_data: args.json = stdin_data["json"]
+        except Exception:
+            pass
+
+    # Strip http:// or https:// prefix from host if present
+    host = args.host.replace("http://", "").replace("https://", "")
+    url = f"http://{host}/backend/garbage.php?ckSize={args.size}"
 
     # 预检
-    ok, _, _, _ = curl_once(args.proxy, f"http://{args.host}/backend/garbage.php?ckSize=1", 1)
+    ok, _, _, _ = curl_once(args.proxy, f"http://{host}/backend/garbage.php?ckSize=1", 1, args.timeout)
     if not ok:
         print(f"ERROR: proxy {args.proxy} unreachable", file=sys.stderr)
         sys.exit(1)
 
     print(f"PPP Link Bench")
-    print(f"rounds={args.rounds} size={args.size}MB proxy={args.proxy} host={args.host}")
+    print(f"rounds={args.rounds} size={args.size}MB proxy={args.proxy} host={host}")
     print()
 
     start = time.time()
@@ -94,7 +101,6 @@ def main():
         filled = int(bar_len * frac)
         bar = '=' * filled + '-' * (bar_len - filled)
         avg_mbps = (total_bytes / 1048576) / elapsed if elapsed > 0 else 0
-
         avg_time = elapsed / i if i > 0 else 0
         eta = avg_time * (args.rounds - i)
 
@@ -105,8 +111,6 @@ def main():
             f'{elapsed:.0f}s ETA {eta:.0f}s'
         )
         sys.stdout.flush()
-
-    print()  # newline
 
     elapsed = time.time() - start
     print()
@@ -122,7 +126,7 @@ def main():
             "rounds": args.rounds,
             "size_mb": args.size,
             "proxy": args.proxy,
-            "host": args.host,
+            "host": host,
             "ok": ok_count,
             "fail": fail_count,
             "total_bytes": total_bytes,
