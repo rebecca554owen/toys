@@ -31,6 +31,12 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 class QuietRequestHandler(http.server.SimpleHTTPRequestHandler):
+    # HTTP/1.0 (the http.server default) closes the connection after every
+    # response. That hides proxy keep-alive defects: the client is forced to
+    # reconnect and never exercises the reuse path. Benchmarks must run on a
+    # real HTTP/1.1 keep-alive origin, so force HTTP/1.1 here.
+    protocol_version = "HTTP/1.1"
+
     def log_message(self, format, *args):
         pass
 
