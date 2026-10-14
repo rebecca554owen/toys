@@ -12,7 +12,7 @@ metadata:
 
 本 skill 合并 openppp2 的本地验证、双端测试、部署升级、Transport Auth、mux、XTCP、Mac 客户端、macOS 编译、Android `.so` 编译和发布运维流程。涉及 openppp2 代码或运行中的 PPP 时优先使用本文件。
 
-**默认按文首「🧭 标准验证流程」走热路径**：无变更、栈已健康时不重启 ppp、不重启测速服务；ctest 在测试编译之后、启双端/测速之前。
+**默认按文首「🧭 标准验证流程」走热路径**：无变更、栈已健康时不重启 ppp、不重启测速服务；本地只做 lint + 编译，`ctest` 交给 CI。
 
 ## 当前仓库与 Mac 本地测试配置
 
@@ -115,7 +115,7 @@ osascript -e 'do shell script "<命令>" user name "admin" password "<password>"
 | 有无代码/配置变更 | `git status` 干净且 `bin/ppp` 不比源码新 | 进入编译 / `本地验证` |
 | 栈是否在跑 | `pgrep -x ppp` | 按「启停硬规矩」冷启动 |
 | 隧道是否健康 | stats `phase=connected` + `mux_active_links` 稳定 + 代理 HTTP **204** | 才重启（见下） |
-| 9091 测速服务 | `curl -sI http://127.0.0.1:9091/` 通 | 才起 `http_server.py` |
+| 9092 测速服务 | `curl -sI http://127.0.0.1:9092/` 通，且首行是 **HTTP/1.1**（HTTP/1.0 会掩盖代理 keep-alive 缺陷） | 才起 `http_server_node.js` / `http_server_node.js` |
 | 测试文件 | `/tmp/test1mb.bin` 等存在 | **只 `dd` 补文件，不起服务** |
 
 **热路径（刚启动、或无代码变更、栈已健康）：跳过杀 ppp、跳过重启 Python → 直接自检 + hey。**
@@ -128,13 +128,13 @@ osascript -e 'do shell script "<命令>" user name "admin" password "<password>"
 
 混权限只停 proxy 用 pid，不要 `pkill -x` 误杀 server（见硬规矩 §2）。
 
-### 1. 本地验证（ctest 的位置）
+### 1. 本地验证（lint + 编译；ctest 交给 CI）
 
-**顺序固定：lint → 配置 tests → `cmake --build` 测试目标 → `ctest`。**
+**本地顺序固定：lint → `ninja ppp` 编译。`ctest` 吃 CPU，交给 CI（`test.yml`）。**
 
-- `ctest` **必须在测试编译之后**（没有二进制跑不了）。  
-- `ctest` **不能放在整次流程最后**；改完代码应先过 ctest，再编译/替换 `bin/ppp`、再考虑重启双端、最后测速。  
-- 与 release 的 `ninja ppp` 是两套构建目录，但「先编测试再 ctest」不变。
+- lint 必过：`bash tools/check_include_boundaries.sh`、`bash tools/check_vcxproj_sources.sh`。
+- 编译用固定目录 `build-macos`（见「macOS 编译 ppp」），产物 `bin/ppp`；不要每次换目录。
+- 需要本地 `ctest` 排查时用 `build/test-local`；它与 `ninja ppp` 是两套目录，且 `ctest` 必须在测试编译之后。
 
 ### 2. 仅在需要时编译 ppp
 
@@ -146,7 +146,7 @@ osascript -e 'do shell script "<命令>" user name "admin" password "<password>"
 
 ### 4. 测速（ensure，不狂重启）
 
-见「运行 bench」：**先 ensure 9091 + 文件，再 hey**；强杀 9091 仅 bind 失败时用一次。
+见「运行 bench」：**先 ensure 9092 + 文件，再 hey**；强杀 9092 仅 bind 失败时用一次。
 
 ---
 
@@ -230,6 +230,10 @@ ninja ppp
 ```
 
 > 📌 shell 代码块里续行符是**单反斜杠 `\`**（Markdown 若写成 `\\` 是转义显示；直接复制进终端会多一行 `\` 导致失败）。
+
+> ⚠️ **`-DTHIRD_PARTY_LIBRARY_DIR` 的相对路径按「当前工作目录」解析**：上面的写法依赖先 `cd build-macos`。
+> 若从仓库根用 `cmake -S . -B build-macos`，`../third-party` 会被解析成 `~/Documents/GitHub/third-party`（少一层 `openppp2`），
+> 直到编译才报 `libssl.a ... missing and no known rule`。从仓库根构建请用绝对路径：`-DTHIRD_PARTY_LIBRARY_DIR=$PWD/third-party`。
 
 产物是 `~/Documents/GitHub/openppp2/bin/ppp`。验证：
 
@@ -378,6 +382,11 @@ osascript -e 'do shell script "kill -9 $(pgrep -x ppp)" user name "admin" passwo
 >   `-m proxy` 下仍可带，但 `--proxy-http-port` / `--proxy-socks-port` 才是 proxy 模式的端口开关
 >   （默认读配置里的 `client.http-proxy` / `client.socks-proxy`）
 > - XTCP vs lwIP 性能对比必须在 Linux 环境测试
+> - **XTCP 构建开关以上游为准**：`-DENABLE_XTCP=ON`（默认 **OFF**，仅 Linux desktop；其他平台 CMake 直接 `FATAL_ERROR`）。
+>   源码用 `bash tools/prepare_xtcp.sh` 拉到 `third-party/xtcp`（pin `e79db8f`），**不是 git 子模块**。
+>   Linux 产物要带 xtcp：先 `prepare_xtcp.sh` 再 `-DENABLE_XTCP=ON`（见 `build-linux-amd64.yml` / `build-linux-cross.yml`）。
+>   XTCP 单测 `-DENABLE_XTCP_TESTS=ON`（同样需 `third-party/xtcp`），默认 OFF。
+>   macOS 本地构建默认**不带** xtcp，`--tcp-stack=xtcp` 会静默回退 native。
 
 ### 本地配置文件（重启后需重建）
 
@@ -873,89 +882,87 @@ cmake -S bench -B build-bench -DCMAKE_BUILD_TYPE=Release && cmake --build build-
 - secret 必须双端一致、权限 0600、长度 64 字符
 - 需双端同时启用才能建立连接
 
-**运行 bench**（使用静态文件服务器 + hey，不依赖 PHP 容器）：
+## 运行 bench（混合文件大小 soak，约 10 分钟）
 
-工具：`hey`（HTTP 负载生成器）
+工具：**`hey`** + 静态文件服务（源站用 Node）。
+
+> ⚠️ **实测分工（2026-10，源站=Node 9092，走代理 7899）**
+> | 工具 | 走代理 | ≥500MB 大文件 | 用途 |
+> |---|---|---|---|
+> | **`hey`** | ✅ | **c=1/2/4/8 全部 8/8 成功；单连接连下 2×500MB 也 2/2** | **大文件 + 主测速**：`-t 0 -n N -c C -x http://127.0.0.1:7899` |
+> | `curl` | ✅ | ✅ 单流 500MB/1000MB 字节完整 | 单请求正确性与字节数核对 |
+>
+> ⚠️ **源站用 Node 9092**：Python `ThreadingHTTPServer` 在 c≥10 自己就挂（直连实测 c=10→60%、c=50→70%），会把锅甩给 ppp。
+>
+> 🎯 **并发**：本机（16GB，`somaxconn=128`）**推荐 `-c 100`**。
+> `c=128` 压 backlog 边缘掉包（0.16%），`c≥256` 持续劣化。更大吞吐请换大文件降 c（10M→`c32~64`）。
+> 服务端经 `osascript` 启动默认 `ulimit -n 256`，高并发会耗尽 fd 而崩——启动务必带 `"ulimit -n 65535; ..."`。
+> 实测：`hey -n 100000 -c 100` 零错误；1M 次 soak（约 1TiB）同样零错误。
+> 📌 **隧道真实速率的唯一可信来源**是 ppp 客户端 stats：
+> `tail -1 /tmp/ppp-client-stats.jsonl` 取 `runtime.traffic.rx_bytes` 按时间差分（实测隧道上限 ≈ 355 MiB/s ≈ 372 MB/s @ c=4）。
+
+> 验收基线：同一压测加 `-disable-keepalive`（每次新连接）做对照；**两者都应 100% 200**。
+
+**原则：只保证「文件在 + URL 通」，9092 已在跑就不杀、不重起；ppp 已健康就不重启。**
+
+### 标准 soak（推荐，覆盖 5 种文件大小，按请求数，总计约 10 分钟）
+
 ```bash
-brew install hey
-```
-
-### ensure 测速环境（默认；**不要每次重启服务**）
-
-**原则：只保证「文件在 + URL 通」，9091 已在跑就不杀、不重起；ppp 已健康就不重启。**
-
-```bash
-# 1) 文件：缺哪个补哪个
-for f in test1mb.bin:1 test10mb.bin:10 test1gb.bin:1024; do
+# 1) 准备测试文件（5 种大小，缺哪个补哪个）
+for f in test1mb.bin:1 test10mb.bin:10 test100mb.bin:100 test500mb.bin:500 test1gb.bin:1024; do
   name=${f%%:*}; mb=${f##*:}
   [ -f "/tmp/$name" ] || dd if=/dev/zero of="/tmp/$name" bs=1M count="$mb" status=none
 done
 
-# 2) 服务：能取到文件就直接用
-if curl -sf -o /dev/null --max-time 2 http://127.0.0.1:9091/test1mb.bin; then
-  echo "9091 ready — do not restart"
-else
-  python3 ~/.agents/skills/openppp2/scripts/http_server.py 9091 /tmp &
+# 2) 确保 Node 源站 9092 可用（不重启已跑的服务）
+if ! curl -sf -o /dev/null --max-time 2 http://127.0.0.1:9092/test1mb.bin; then
+  node ~/.agents/skills/openppp2/scripts/http_server_node.js 9092 /tmp &
   sleep 1
 fi
 
-# 3) hey
-hey -c 4 -n 10000 -x http://127.0.0.1:7899 http://127.0.0.1:9091/test1mb.bin
-hey -c 2 -n 10000 -x http://127.0.0.1:7899 http://127.0.0.1:9091/test10mb.bin
-hey -c 10 -n 10000 -x http://127.0.0.1:7899 http://127.0.0.1:9091/test1gb.bin
+# 3) 混合文件大小 soak —— 全部 hey（按请求数，可复现）
+hey -t 0 -n 20  -c 2  -x http://127.0.0.1:7899 http://127.0.0.1:9092/test1000mb.bin
+hey -t 0 -n 40  -c 4  -x http://127.0.0.1:7899 http://127.0.0.1:9092/test500mb.bin
+hey -t 0 -n 200 -c 4  -x http://127.0.0.1:7899 http://127.0.0.1:9092/test100mb.bin
+hey -t 0 -n 500 -c 10 -x http://127.0.0.1:7899 http://127.0.0.1:9092/test10mb.bin
+hey -t 0 -n 500 -c 20 -x http://127.0.0.1:7899 http://127.0.0.1:9092/test1mb.bin
 ```
 
-> 📌 **强杀 9091 只在 bind 失败时用一次**，不要写成每次 bench 第一步。
-> 占用者为 root 时非 root `kill` 无效：
-> `osascript -e 'do shell script "lsof -ti tcp:9091 | xargs -r kill -9" user name "admin" password "<password>" with administrator privileges'`
-> 然后再起 `http_server.py`。
+> 📌 **hey 必须加 `-t 0`（无限超时）**：默认 20s 超时会把大文件下载截断成 `EOF`，
+> 误报成连接失败。`-t 0` 后仍出现的 `EOF`/`connection reset` 才是真实问题。
+>
+> 📌 **用 `-n <请求数>` 控制每轮耗时**（`-z` 在小文件上会因请求量太大而严重超时）。
 
-**可选更小文件**（延迟）：
-```bash
-dd if=/dev/zero of=/tmp/test1kb.bin bs=1K count=1
-dd if=/dev/zero of=/tmp/test10kb.bin bs=10K count=1
-dd if=/dev/zero of=/tmp/test100kb.bin bs=100K count=1
-dd if=/dev/zero of=/tmp/test100mb.bin bs=1M count=100
-```
+> 📌 **9092 被占用时只在 bind 失败才强杀一次**：
+> `osascript -e 'do shell script "lsof -ti tcp:9092 | xargs -r kill -9" user name "admin" password "<密码>" with administrator privileges'`
 
-> ⚠️ hey 高并发偶发 `EOF` / `connection reset`（2026-09-19：1MB×500 约 1.6%），先看
-> status code 分布与是否稳定在 200，再判断是隧道问题还是瞬时 RST。
-
-**甜点值**（代理模式，1GB 文件）：
-
-| 并发 | 直连 RPS | 直连吞吐 | 代理 RPS | 代理吞吐 | 代理/直连 |
-|------|----------|---------|----------|---------|-----------|
-| 1 | 5.54 | 5.54 GB/s | 0.41 | 410 MB/s | 0.07x |
-| 2 | **6.07** | **6.07 GB/s** | 0.65 | 650 MB/s | 0.11x |
-| 4 | — | — | 0.89 | 890 MB/s | — |
-| 8 | — | — | 1.15 | 1.15 GB/s | — |
-| 10 | — | — | **1.57** | **1.57 GB/s** | — |
-
-**关键发现**：
-- **直连**：c=1-2 最优，单线程就能跑满回环带宽
-- **代理**：c=10+ 最优，随并发增长线性提升，未看到拐点
-- **代理开销**：约 3-4 倍（直连 6.07 vs 代理 1.57）
-- 代理在 1GB 下还没出现性能下降，可能 12-16 才是甜点
-
-**原理**：静态文件服务器无 PHP 生成开销，直接测代理+隧道真实性能。
-
----
-
-**远程服务器测试**（需要外部服务器）：
+### 快速基准（skill 参考参数，约 20GB，1 分钟）
 
 ```bash
-# 通过代理测远程服务器
-hey -c 10 -n 1000 -x http://127.0.0.1:7899 https://httpbin.org/bytes/1048576
+hey -t 0 -n 20 -c 10 -x http://127.0.0.1:7899 http://127.0.0.1:9092/test1000mb.bin
 ```
 
-**带宽单位**：结果默认 MB/s，×8 换算 Mbps（千兆理论 1000 Mbps）。
+> ⚠️ **hey 的 `EOF` / `connection reset` 基本都是 HTTP 代理的 keep-alive bug**（见「HTTP 代理连接复用」）：
+> 代理只解析**第一个**请求（把 absolute-form 重写成 origin-form），之后把连接桥成裸 TCP 管道；
+> 复用连接上的后续请求仍带 absolute-form URI，被原样中继给源站 → 404 / 断链。
+> 判定方法：同一压测加 `-disable-keepalive`（每次新连接）复测，若错误率归零就是它，**不要**判成"瞬时 RST"。
 
-**注意**：
-- 并发不是越高越好，超过甜点值 RPS 反而下降
-- 大文件需要更高并发打满管道
-- 测试不同 size 时，创建对应文件后替换 hey 命令中的文件名即可
-- 大文件需要更高并发打满管道
-- 本机测试不受外部网络影响，适合验证代理本身性能
+### 判定标准
+
+- **错误率 < 2%** 为正常（实测 337GB 混合 soak 错误率 0.49%）。
+- `-z` 模式下的 `aborted due to deadline` 是到点砍在途请求，**不算错误**。
+- `link.error_count` 在 soak 期间不增长；`mux_fallback_reason` 为空。
+- 大文件（1GB）实测吞吐约 400–600 MB/s；10 分钟约 290 GB。
+- 若错误率 > 5% 或 `phase` 掉出 `connected`，先查 coroutine 锚点 / xtcp 配置，再考虑升级。
+
+### 直连对照（可选，测回环上限）
+
+```bash
+hey -c 2 -n 20 http://127.0.0.1:9092/test1gb.bin
+```
+
+**原理**：静态文件服务器无 PHP 生成开销，直接测代理+隧道真实性能；
+混合文件大小覆盖短连接高 rps（1MB）到大文件吞吐（1GB），避免单文件大小偏差。
 
 ## Mac 共享配置校验
 
@@ -1188,12 +1195,12 @@ ppp --help | grep -i Version    # 两端一致；本地源码树未打 CI tag �
 ## 测速目标（本机优先）
 
 ⛔ **本机不再用 Colima / Docker 测速容器**（2026-09-18 用户明确）——
-本机一律 **ensure** `scripts/http_server.py` + `/tmp/test*.bin`（见「运行 bench」的 ensure 一节）：
-**只在本地取料、不依赖内网 NAS**；**9091 已可用则不重启服务，栈已健康则不重启 ppp。**
+本机一律 **ensure** `scripts/http_server_node.js` + `/tmp/test*.bin`（见「运行 bench」的 ensure 一节）：
+**只在本地取料、不依赖内网 NAS**；**9092 已可用则不重启服务，栈已健康则不重启 ppp。**
 
 | 位置 | 地址 | 用途 |
 |------|------|------|
-| **本机（首选）** | `http://127.0.0.1:9091/<file>`（`http_server.py` 提供） | 本地自洽，唯一无外部依赖的方式 |
+| **本机（首选）** | `http://127.0.0.1:9092/<file>`（`http_server_node.js` 提供） | 本地自洽，唯一无外部依赖的方式 |
 | dmit 公网 | `http://154.31.112.162:8081/backend/garbage.php?ckSize=N` | 只在需要真实远端链路时用（docker `speedtest`） |
 | NAS 内网 | `http://192.168.100.10:8081/backend/garbage.php?ckSize=N` | 内网低延迟（docker `librespeed`）；**换台机器可能够不到，别当默认** |
 
@@ -1222,7 +1229,7 @@ vpn=Connected  rx=1.2 GiB  tx=3.4 GiB  link=99.9% Excellent
 
 **统一走「运行 bench → ensure 测速环境」**，不要另起一套「先 kill 再 python -m http.server」。
 
-- 默认：`127.0.0.1:9091` + `/tmp/test*.bin` + `scripts/http_server.py`  
+- 默认：`127.0.0.1:9092` + `/tmp/test*.bin` + `scripts/http_server_node.js`  
 - 已在听：只 `dd` 补缺失文件，**不重启**  
 - 端口绑不上：才强杀一次（见 ensure 节 osascript）  
 
