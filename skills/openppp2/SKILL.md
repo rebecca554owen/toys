@@ -115,10 +115,10 @@ osascript -e 'do shell script "<命令>" user name "admin" password "<password>"
 | 有无代码/配置变更 | `git status` 干净且 `bin/ppp` 不比源码新 | 进入编译 / `本地验证` |
 | 栈是否在跑 | `pgrep -x ppp` | 按「启停硬规矩」冷启动 |
 | 隧道是否健康 | stats `phase=connected` + `mux_active_links` 稳定 + 代理 HTTP **204** | 才重启（见下） |
-| 9092 测速服务 | `curl -sI http://127.0.0.1:9092/` 通，且首行是 **HTTP/1.1**（HTTP/1.0 会掩盖代理 keep-alive 缺陷） | 才起 `http_server_node.js` / `http_server_node.js` |
+| 9092 测速服务 | `curl -sI http://127.0.0.1:9092/` 通，且首行是 **HTTP/1.1**（HTTP/1.0 会掩盖代理 keep-alive 缺陷） | 才起 `http_server_node.js` |
 | 测试文件 | `/tmp/test1mb.bin` 等存在 | **只 `dd` 补文件，不起服务** |
 
-**热路径（刚启动、或无代码变更、栈已健康）：跳过杀 ppp、跳过重启 Python → 直接自检 + hey。**
+**热路径（刚启动、或无代码变更、栈已健康）：跳过杀 ppp、跳过重启源站 → 直接自检 + hey。**
 
 **必须冷重启 ppp 的情形：**
 
@@ -134,7 +134,8 @@ osascript -e 'do shell script "<命令>" user name "admin" password "<password>"
 
 - lint 必过：`bash tools/check_include_boundaries.sh`、`bash tools/check_vcxproj_sources.sh`。
 - 编译用固定目录 `build-macos`（见「macOS 编译 ppp」），产物 `bin/ppp`；不要每次换目录。
-- 需要本地 `ctest` 排查时用 `build/test-local`；它与 `ninja ppp` 是两套目录，且 `ctest` 必须在测试编译之后。
+- 需要本地 `ctest` 排查时用 `sh scripts/run-cpp-tests.sh`（输出到 `build/test`）；
+  它与 `ninja ppp` 是两套目录，且 `ctest` 必须在测试编译之后。详见「本地验证」一节。
 
 ### 2. 仅在需要时编译 ppp
 
@@ -886,6 +887,84 @@ cmake -S bench -B build-bench -DCMAKE_BUILD_TYPE=Release && cmake --build build-
 
 工具：**`hey`** + 静态文件服务（源站用 Node）。
 
+### 快速上手（一条龙，从零到出结果）
+
+```bash
+# ── 前置 1：测试文件（缺哪个补哪个）──────────────────────────
+for f in test1mb.bin:1 test10mb.bin:10 test100mb.bin:100 test1gb.bin:1024; do
+  name=${f%%:*}; mb=${f##*:}
+  [ -f "/tmp/$name" ] || dd if=/dev/zero of="/tmp/$name" bs=1M count="$mb" status=none
+done
+
+# ── 前置 2：Node 源站 9092（内存版，读一次文件全走内存，快）────
+#    用途：测隧道连通性/稳定性/错误率，跑得快。
+#    （吞吐数字不代表隧道上限——内存源站无磁盘 I/O，仅此而已。）
+if ! curl -sf -o /dev/null --max-time 2 http://127.0.0.1:9092/test1mb.bin; then
+  node ~/.agents/skills/openppp2/scripts/http_server_node.js 9092 /tmp &
+  sleep 1
+fi
+
+# ── 前置 3：ppp 测试床（⚠️ 必须先 server 再 client，顺序反了会 err=1）──
+#    配置文件在 /tmp/ppp-local/appsettings.json（丢了从 toys/openppp/ 恢复）
+if ! curl -sf -o /dev/null --max-time 3 -x http://127.0.0.1:7899 http://127.0.0.1:9092/test1mb.bin; then
+  # server（root 启动）
+  osascript -e 'do shell script "cd /tmp && /Users/admin/Documents/GitHub/openppp2/bin/ppp -m server -c /tmp/ppp-local/appsettings.json --tcp-stack=xtcp --stats-json=/tmp/ppp-stats.jsonl > /tmp/ppp-srv.log 2>&1 &" user name "admin" password "2026" with administrator privileges'
+  sleep 8
+  # client（监听 7899）
+  cd /tmp && nohup /Users/admin/Documents/GitHub/openppp2/bin/ppp -m proxy -c /tmp/ppp-local/appsettings.json --tun-mux=10 --tun-mux-acceleration=3 --mux-mode=flow --tcp-stack=xtcp --stats-json=/tmp/ppp-client-stats.jsonl > /tmp/ppp-client.log 2>&1 &
+  sleep 12
+fi
+
+# ── hey 压测（核心命令）─────────────────────────────────────
+# 格式: hey -t 0 -n <请求数> -c <并发> -x http://127.0.0.1:7899 http://127.0.0.1:9092/test<N>mb.bin
+hey -t 0 -n 10000 -c 100 -x http://127.0.0.1:7899 http://127.0.0.1:9092/test1mb.bin
+```
+
+**hey 参数速查：**
+
+| 参数 | 含义 | 推荐值 |
+|---|---|---|
+| `-t 0` | 无限超时（大文件必须） | 0 |
+| `-n N` | 请求次数（`-z` 秒数模式对小文件会严重超时，勿用） | 按需 |
+| `-c C` | 并发数 | **100**（实测最佳） |
+| `-x URL` | HTTP 代理 = ppp client | `http://127.0.0.1:7899` |
+
+**并发选择——⚠️ 必须按文件大小分档（2026-10-14 实测，10 核机）：**
+
+| 文件大小 | 安全并发 | 禁止并发 | 实测依据 |
+|---|---|---|---|
+| ≤ 10 MB | **c=100**（539-919 rps，零错误） | c=128（稳定丢 16 个） | 1M×1MB + 500k×10MB 全过 |
+| ≥ 20 MB | **c≤10（零错误）**，c=32 可用（0.8%） | **c≥64 开始失败，c=100 会崩 server** | 见下表 |
+
+**20MB 降并发实测（1K 次，内存源站）：**
+
+| c | 成功 | 失败率 | server |
+|---|---|---|---|
+| 100 | 208-219/1000 | ~80% | **崩溃 SIGSEGV (exit 139)，可复现** |
+| 64 | 959/1000 | 4.1% | 存活 |
+| 32 | 992/1000 | 0.8% | 存活 |
+| 16 | 992/1000 | 0.8% | 存活 |
+| **10** | **1000/1000** | **0%** | 存活 |
+
+**10MB 升并发实测（1K 次，新测试床）：**
+
+| c | 成功 | 备注 |
+|---|---|---|
+| 10 | 999/1000 | 23s |
+| 32 | 992/1000 | 22s |
+| 64 | 960/1000 | **吞吐塌方：357s（2.7 rps），拥塞死亡螺旋** |
+| 100 | 377/1000 | **隧道断（reconnecting）** |
+
+> 💡 **在途数据量模型**：`并发 × 文件大小 = 在途数据`，隧道安全边界 **≈320 MB**（每条 mux 链路 ~32MB）。
+> 安全并发 ≈ `320MB ÷ 文件大小`：1MB→c=100 ✅、10MB→c=30、20MB→c=16、50MB→c=6、100MB+→c=3 或串行。
+> 超过 640MB 在途即拥塞坍塌（吞吐崩至 2.7 rps）或大量失败，≥1.28GB 可打出 server SIGSEGV。
+
+> 🚨 **c=100 × ≥20MB 会把 ppp server 打崩**（SIGSEGV exit 139，无 ASan 报告，10-16s 内死亡，可复现，与 hardening commit 无关——revert 后依旧）。
+> 根因画像：100 条并发慢速大传输 = 隧道内 ~2GB 在途数据，远超 10 条 mux 链路的流控容量；失败率随并发阶梯上升（0.8%→4%→80%）是资源耗尽模式。**待深挖 vmux 流控（issue 级别）。**
+>
+> 🚨 **测大文件吞吐时警惕源站假象**：内存版源站（readFileSync 一次 + res.end(同一Buffer)）会报出 17 GB/s 的假吞吐。真实 I/O 源站（每请求 createReadStream）只有 ~1 GB/s，差 16 倍。测吞吐用真实 I/O；测错误率/连通性用内存版（快）。
+> 另：⚠️ 自写源站曾被硬编码只返回 test1mb.bin 导致「100k×20MB 成功」的假结论——**核对 hey 输出的 Size/request 是否等于文件实际大小**。
+
 > ⚠️ **实测分工（2026-10，源站=Node 9092，走代理 7899）**
 > | 工具 | 走代理 | ≥500MB 大文件 | 用途 |
 > |---|---|---|---|
@@ -949,11 +1028,12 @@ hey -t 0 -n 20 -c 10 -x http://127.0.0.1:7899 http://127.0.0.1:9092/test1000mb.b
 
 ### 判定标准
 
-- **错误率 < 2%** 为正常（实测 337GB 混合 soak 错误率 0.49%）。
+- **错误率 < 2%** 为正常。
 - `-z` 模式下的 `aborted due to deadline` 是到点砍在途请求，**不算错误**。
 - `link.error_count` 在 soak 期间不增长；`mux_fallback_reason` 为空。
-- 大文件（1GB）实测吞吐约 400–600 MB/s；10 分钟约 290 GB。
 - 若错误率 > 5% 或 `phase` 掉出 `connected`，先查 coroutine 锚点 / xtcp 配置，再考虑升级。
+- `EOF`/`connection reset` 先加 `-disable-keepalive` 复测定位（见上方代理 keep-alive bug 判定法）。
+- 隧道链路经过数 TB 流量后会退化（速率降、links 波动）——**重启测试床可恢复**。
 
 ### 直连对照（可选，测回环上限）
 
@@ -1015,23 +1095,41 @@ wc -c /Users/admin/ppp/transport-auth-current.key
 
 ## 本地验证（改代码后、重启双端/测速**之前**）
 
-**顺序不要颠倒：**
+**一条命令搞定**：`scripts/run-cpp-tests.sh` 已经包含 configure + build + ctest，
+输出到 `build/test`。**不要自己拼 cmake 命令，也不要手动加 `-I third-party/...`
+或 `-L third-party/openssl/lib`** —— `tests/cpp/CMakeLists.txt` 自己会找到
+`third-party/boost`（配置日志里的 `-- Using local third-party Boost` 就是证据）；
+手加路径反而会让链接失败并报出假的 `Undefined symbols: ERR_lib_error_string`。
 
-1. lint  
-2. `cmake` 配置 tests  
-3. `cmake --build build/test-local`（**先编测试**）  
-4. `ctest`（**只能在 3 之后，不能在编译前**）
+```bash
+cd ~/Documents/GitHub/openppp2
+sh scripts/run-cpp-tests.sh          # configure + build + ctest，约 1-3 分钟
+```
+
+**只想验证能编译、不想等 ctest**（改完 `.h` 想快速确认没编译错误时用这个）：
+
+```bash
+cmake -S tests/cpp -B build/test -G Ninja
+cmake --build build/test -j8        # 只编译，不跑测试
+```
+
+`ctest` 本地属于**可选**项：全套 116 个约 35 秒，CI 的 `Test · Unit` 也会跑。
+**改了有测试覆盖的模块**（mux / handshake / transport-auth / record / XTCP / HTTP
+proxy）就本地跑一次；只动文档、CI 配置、平台脚本时可以跳过，交给 CI。
+
+顺序不要颠倒：`ctest` 必须在编译之后（没有二进制跑不了）。
+新增 `.cpp` 后要重新运行 cmake 让它进构建图；CRLF 文件不要用会改变整文件行尾的工具。
 
 ```bash
 cd ~/Documents/GitHub/openppp2
 bash tools/check_include_boundaries.sh
 bash tools/check_vcxproj_sources.sh
-cmake -S tests/cpp -B build/test-local -G Ninja \
-  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-  -DCMAKE_CXX_FLAGS=-DBOOST_STACKTRACE_GNU_SOURCE_NOT_REQUIRED
-cmake --build build/test-local -j8
-ctest --test-dir build/test-local --output-on-failure
+# 单个测试直接跑二进制，比全量 ctest 快：
+./build/test/http_proxy_request_rewriter_test
 ```
+
+改握手、TA、record、mux 或 XTCP 后，单测通过还不够，必须做真实双端测试。  
+**无代码变更时本节可跳过**，直接走「标准验证流程」热路径。
 
 新增 `.cpp` 后重新运行 cmake；CRLF 文件不要用会改变整文件行尾的工具。改握手、TA、record、mux 或 XTCP 后，单测通过还不够，必须做真实双端测试。  
 **无代码变更时本节可跳过**，直接走「标准验证流程」热路径。
