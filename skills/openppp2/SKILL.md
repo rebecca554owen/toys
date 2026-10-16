@@ -1160,11 +1160,7 @@ bash tools/check_vcxproj_sources.sh
 - the VPS `ppp`（`:the port`）是稳定服务端，当前 `concurrent=1`；`ppp2`（`:the port`）是实验服务端，当前 `concurrent=1`。
 - the LAN host `ppp` 是连接 `:the port` 的客户端（HTTP `the port`、SOCKS `the port`），使用 **IPv4**。
 - the LAN host `ppp2` 是连接 `:the port` 的客户端（HTTP `the port`、SOCKS `the port`），使用 **IPv6**（`[the IPv6 endpoint]`）。
-- the LAN host 两套 systemd client 都使用 `--tun-host=no --tun-mux=10 --mux-mode=flow`，并且**历史上写的是 `--tun-tcpip=xtcp`（2026-10-16 前的实测记录）**。
-  ⚠️ **`--tun-tcpip` 这个 flag 已在 v2.1.15 改名为 `--tcp-stack`，旧名会被静默忽略**（退出码 0、不报错、不生效）。
-  ⇒ 这条记录**尚未核实**：要么 the LAN host 单元至今仍传旧名（那两套 client 实际没在走 XTCP），
-  要么早已改成新名（在走 XTCP）。**部署前先 `systemctl cat` 读实际启动参数，别照抄这里。**
-  注意：把旧名改成 `--tcp-stack=xtcp` 会**立刻让 client 真的切到 XTCP 数据面**，那是行为变更不是修笔误。
+- the LAN host 两套 systemd client 都使用 `--tun-host=no --tun-mux=10 --mux-mode=flow --tcp-stack=xtcp`。
   > 🚨 **参数名坑（2026-10-16 实测修正）**：the LAN host 两个单元文件曾一直带着改名前的旧参数
   > `--tun-tcpip=xtcp`（v2.1.15 起改名，见本文 248 行），**被新版二进制静默忽略 → 实际跑的是 native 栈**，
   > 后果：公网高并发小文件 N% 失败（the size×3000 c=50 只成 1670）+ 吞吐低 N%+。
