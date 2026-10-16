@@ -1399,14 +1399,13 @@ done; wait   # 各行 speed_download 相加 ×8 = 聚合 Mbps（7893 同理换 I
 > 💡 终端侧 speedtest（经 mihomo→隧道→dmit 出口）的 Upload 偏低是**家宽上行限制**，与隧道无关；
 > 下载方向才能反映隧道能力。测试时注意用户 mihomo 流量与压测共用隧道，会互相挤占。
 
-> 🚨 **公网大文件长传输会被掐（2026-10-16 实测，issue 级别）**：NAS 本机经 7894 单条拉
-> dmit:9092 大文件，500MB（~7s）能完整过；**1GB 在 389MB/865MB 处被断（curl exit=18 partial file）**；
-> 6 并发 × 1GB 每条 2s 即断。速率本身能到 576-703 Mbps（断前）。NAS journal 见 mux 子链路
-> `record header read FAILED err=101`（ECANCELED）+ `socket closed role=child`。
-> **两端 ppp 资源全程平稳**（dmit server RSS 11-17MB / NAS client ~80MB）——不是资源瓶颈，
-> 疑似**饱和流量把 mux 控制帧/keepalive 饿死 → 链路超时重连 → 在途 flow 被杀**（本地回环
-> 带宽富余从不复现）。深挖方向：mux 链路 keepalive 与数据帧的队列公平性。
-> **规避**：公网吞吐测试用 ≤100MB 文件多并发聚合（能完整跑完），别用单条 GB 级长传输。
+> 🚨 **公网大文件长传输被掐 = 隧道劣化，重启即恢复（2026-10-16 定案）**：单条 1GB 经 7894
+> 曾在 288/389/865MB 处被断（curl exit=18，NAS 侧 mux 子链路 `err=101 ECANCELED`）。
+> **已验证不是**：源站问题（dmit 本机直拉源站 1GB 完整）、OOM（dmit 无 oom-killer 记录、
+> ppp 无重启）、node（存活）、带宽（断前 700 Mbps）。
+> **`systemctl restart ppp2` 重建 mux 链路后立即完整通过 1GB（627 Mbps）**——即 skill 已知的
+> 「隧道数 TB 流量后退化，重启可恢复」现象。真公网大文件（Linode Tokyo 1GB，600 Mbps）同向完整过。
+> **规避**：大文件断流先重启对应 NAS client 重建链路再测；公网吞吐优先 ≤100MB 多并发聚合。
 
 > 🚨 **Static Echo（FRP）通道大流量 bug（2026-10-16 实测，issue 级别；FRP 测速方案已废弃，结论仍有效）**：
 > 曾试「NAS 源站 + `client.mappings` 9092 暴露」：1MB/10MB 全过（5-9 MB/s）；100MB 卡死（60s 只出 1MB / 空回复）；
