@@ -11,8 +11,11 @@
 // never exercises the reuse path). Node's http server keeps the connection
 // alive by default, which is what real browsers/proxies do.
 //
-// Usage:  node http_server_node.js [port] [directory]
-// Defaults: port=9092, directory=/tmp
+// Usage:  node http_server_node.js [port] [directory] [host]
+// Defaults: port=9092, directory=/tmp, host=127.0.0.1
+// Pass host=0.0.0.0 only on origin boxes that must be reachable from other
+// machines (e.g. the dmit public test origin); keep the default on local
+// testbeds so the origin never listens beyond loopback.
 
 const http = require('http');
 const fs = require('fs');
@@ -20,6 +23,7 @@ const path = require('path');
 
 const port = Number.parseInt(process.argv[2] || '9092', 10);
 const directory = process.argv[3] || '/tmp';
+const host = process.argv[4] || '127.0.0.1';
 
 // Lazy cache: first request for a file reads it from disk, all later requests
 // hit the in-memory Buffer (zero disk I/O).
@@ -61,6 +65,6 @@ const server = http.createServer((req, res) => {
 // Aggressive keep-alive: the point of this origin is connection reuse.
 server.keepAliveTimeout = 30000;
 server.headersTimeout = 35000;
-server.listen(port, '127.0.0.1', () => {
-  console.log('memory origin on 127.0.0.1:' + port + ' from ' + directory);
+server.listen(port, host, () => {
+  console.log('memory origin on ' + host + ':' + port + ' from ' + directory);
 });

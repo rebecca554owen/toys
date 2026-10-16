@@ -63,7 +63,7 @@ start_client() {
     local args="--mode=$mode --config=$CFG_CLI --tun-host=no --tun-vnet=no --tun-mux=$mux --tun-mux-acceleration=3"
     [ "$mmode" != "-" ] && args="$args --mux-mode=$mmode"
     [ "$turbo" = "y" ] && args="$args --mux-mode-turbo=true"
-    [ "$xtcp" = "y" ] && args="$args --tun-tcpip=xtcp"
+    [ "$xtcp" = "y" ] && args="$args --tcp-stack=xtcp"
     (cd "$REPO_DIR" && nohup ./bin/ppp $args > "$LOG_DIR/client-$tag.log" 2>&1 &)
     sleep 8
     grep -q "AppAlreadyRunning" "$LOG_DIR/client-$tag.log" && { log "client 启动失败: 端口占用"; return 1; }

@@ -211,16 +211,18 @@ osascript -e 'do shell script "pgrep -lx ppp ; lsof -nP -iTCP:20000 -sTCP:LISTEN
 ~/Documents/GitHub/toys/openppp/BUILD.macos.md
 ```
 
-不能只执行 `cmake --build`，第三方依赖需按固定版本和顺序准备。产物统一放在 `openppp2/third-party/`：Boost 1.86.0、jemalloc 5.3.1、OpenSSL 4.0.2。完整下载、编译、检查和 OpenSSL 软链接步骤只维护在 toys 文档，避免流程漂移。
+不能只执行 `cmake --build`，第三方依赖需按固定版本和顺序准备。产物统一放在 `openppp2/third-party/`：Boost 1.92.0、jemalloc 5.4.0、OpenSSL 4.0.3。完整下载、编译、检查和 OpenSSL 软链接步骤只维护在 toys 文档，避免流程漂移。
 
-依赖就绪后：
+> 仓库里**没有** macOS 的 ppp 编译脚本。根目录的 `build-openppp2-by-builds.sh` / `build-openppp2-by-cross.sh` 是 Linux 专用（写死 `/root/dd`、`/root/dev` 并替换 `CMakeLists.txt` 变体），不适用于 macOS。macOS 仍是 CMake + Ninja 直调。
+> 仓库里的 sh 脚本是**测试与检查**那一类，见下方「本地验证」一节。
+
+依赖就绪后（`build-macos` 已存在就复用，不要删）：
 
 ```bash
 cd ~/Documents/GitHub/openppp2
-rm -rf build-macos
 mkdir -p build-macos
 cd build-macos
-CC=/usr/bin/cc CXX=/usr/bin/c++ \
+[ -f CMakeCache.txt ] || CC=/usr/bin/cc CXX=/usr/bin/c++ \
 cmake \
   -DTHIRD_PARTY_LIBRARY_DIR=../third-party \
   -DPLATFORM_SYSTEM_DARWIN=ON \
@@ -240,10 +242,12 @@ ninja ppp
 
 ```bash
 file ~/Documents/GitHub/openppp2/bin/ppp
-~/Documents/GitHub/openppp2/bin/ppp --help | grep -E 'Version|transport-auth-key|tun-tcpip'
+~/Documents/GitHub/openppp2/bin/ppp --help | grep -E 'Version|tcp-stack|transport-auth-key'
 ```
 
-Boost 工具集必须使用 `clang-darwin`；OpenSSL 安装后必须保留 `openssl/libssl.a` 和 `openssl/libcrypto.a` 软链接；切换第三方版本后删除 `build-macos` 重新配置。
+> `--tun-tcpip` 已在 v2.1.15 改名为 `--tcp-stack`，grep 旧名字会静默返回空。
+
+Boost 工具集必须使用 `clang-darwin`；OpenSSL 安装后必须保留 `openssl/libssl.a` 和 `openssl/libcrypto.a` 软链接；**只有**切换第三方版本时才需要删掉 `build-macos` 重新配置，日常增量编译直接 `ninja ppp`（无改动时会输出 `ninja: no work to do`）。
 
 ## Android arm64 `.so` 编译
 
@@ -378,7 +382,7 @@ osascript -e 'do shell script "kill -9 $(pgrep -x ppp)" user name "admin" passwo
 > （`--tun-host=no` 用在 NAS 的 systemd client 上是另一回事，那里没有第二个 TUN。）
 
 > ⚠️ **其他注意**：
-> - macOS 客户端不支持 lwIP/XTCP 协议栈（`--tun-tcpip` 参数在 macOS 上无效），走的是内核原生 TCP/IP 栈
+> - macOS 客户端不支持 lwIP/XTCP 协议栈（`--tcp-stack` 参数在 macOS 上无效），走的是内核原生 TCP/IP 栈
 > - `--tun-mux` / `--tun-mux-acceleration` / `--mux-mode` 在帮助里归类为 **CLIENT-SPECIFIC**；
 >   `-m proxy` 下仍可带，但 `--proxy-http-port` / `--proxy-socks-port` 才是 proxy 模式的端口开关
 >   （默认读配置里的 `client.http-proxy` / `client.socks-proxy`）
@@ -668,16 +672,18 @@ TapDarwin::~TapDarwin() noexcept {
 
 **验证**：客户端退出时 utun 接口自动销毁（如 utun4 → 消失）。
 
-## OpenSSL 4.0.2 升级（v2.1.8+）
+## OpenSSL 升级历史
 
-v2.1.8 起升级到 OpenSSL 4.0.2（从 4.0.1），主要修复：
-- QUIC server double-free 漏洞（CVE-2026-xxxx）
-- 其他安全修复
+版本轨迹：4.0.1 → **4.0.2**（v2.1.8）→ **4.0.3**（v2.2.5）。**当前是 4.0.3**。
 
-**编译注意**：
-- OpenSSL 4.0.2 在当前 macOS 上编译需要 `make install_sw` 安装到 `openssl/` 目录
+- v2.1.8 的 4.0.2：QUIC server double-free 漏洞（CVE-2026-xxxx）等安全修复。
+- v2.2.5 的 4.0.3：见该版本 release notes。
+
+**编译注意（4.0.x 通用）**：
+- 在当前 macOS 上编译需要 `make install_sw` 安装到 `openssl/` 目录
 - 库文件实际位置：`openssl/lib/libssl.a` 和 `openssl/lib/libcrypto.a`
 - 编译后需重新构建 ppp 二进制
+- **切换 OpenSSL 版本后必须删掉 `build-macos` 重新 configure**（CMake 缓存了 OpenSSL 路径）
 
 ## MUX 4096 flow-slot 泄漏修复（v2.1.8+）
 
@@ -1154,7 +1160,7 @@ bash tools/check_vcxproj_sources.sh
 - dmit `ppp`（`:2025`）是稳定服务端，当前 `concurrent=1`；`ppp2`（`:2030`）是实验服务端，当前 `concurrent=1`。
 - NAS `ppp` 是连接 `:2025` 的客户端（HTTP `7893`、SOCKS `1083`），使用 **IPv4**。
 - NAS `ppp2` 是连接 `:2030` 的客户端（HTTP `7894`、SOCKS `1084`），使用 **IPv6**（`[2403:18c0:1000:fa:94b9:dcff:fe32:ba9d]`）。
-- NAS 两套 systemd client 都使用 `--tun-host=no --tun-mux=10 --mux-mode=flow --tun-tcpip=xtcp`。
+- NAS 两套 systemd client 都使用 `--tun-host=no --tun-mux=10 --mux-mode=flow --tcp-stack=xtcp`。
 - macOS 本地测试不照搬远端并发数，固定 `concurrent=10` 与本机 `hw.ncpu` 一致；复用的是双方已互通的 framing、crypto key、GCM 和 TA 参数。
 - NAS 和 dmit 都使用 systemd 托管，升级前备份旧二进制，替换后 `systemctl restart`。
 - 运行中的 Linux 二进制不能直接覆盖，先准备备份和回滚路径。
@@ -1231,6 +1237,55 @@ bash tools/check_vcxproj_sources.sh
 - 统一记录 URL、模式、mux、mux-mode、turbo、XTCP 开关和实际下载字节数。
 - 先本地 lint、单测、构建，再整理 commit；禁止把 secret、临时配置、日志纳入 Git。
 
+## Release notes 写法（用户定稿标准，2026-10-16）
+
+**Release title 一律就是版本号本身**，详细中文 notes 是**发布后**再补写。
+
+### 只说改了什么，不解释为什么
+
+**留**：
+- 配置要求（Transport Auth secret 一致 / 0600 / 64 字符、`ip.interface` 必须真实存在）
+- 行为变化
+- **静态链接进二进制的运行时依赖升级**（OpenSSL、jemalloc —— 客户会在自己机器上跑它）
+
+**删**：
+- 「`Test · Unit` 全绿」「六个平台构建全绿」这类 CI 结论
+- CI job 切分、缓存 key、runner 镜像、`restore-keys` 推理
+- 「清空历史遗留警告」等构建卫生
+- 第三方库发布状态措辞（「非预发布」「4.1.0 仍是 beta」）
+- 版本号在各平台文件间的同步过程
+- 因果推理、事故来由、内部符号名与文件路径
+
+**篇幅**：一行一条改动。补丁版 ≤12 非空行，功能版 ≤32（v2.2.0–v2.2.6 已从 394 行砍到 79 行）。
+
+### 「升级注意」只写破坏性变更
+
+**删**（这些是苏倚自己部署四端用的流程，不是客户信息）：「本版无新增配置项」/「secret 仍须两端一致」/「只需替换二进制」/「按服务端+客户端一组一组做」/「applicationId 没变，无需卸载重装」。
+
+**留**：真破坏性变更，标题写「破坏性变更」。判据 = **别人按旧配置直接升级会不会坏**。
+已保留的只有 v2.2.0：Transport Auth 换 AEAD 记录层（两端必须同版本）、`key.transport` 必须为 AEAD、`--tcp-stack=xtcp` 的平台门禁。
+
+### 统一格式
+
+```markdown
+## vX.Y.Z — 一句话概括
+
+### 变更
+
+- 一条改动
+- 一条改动
+
+---
+
+**Full Changelog**: https://github.com/rebecca554owen/openppp2/compare/vX.Y.(Z-1)...vX.Y.Z
+```
+
+**notes 写完先给用户预览再推**（`gh release edit` 是远端写操作）。
+Compare 链接的基准用**上一个 tag**，不要出现 `1.0.0.26151...` 这种上游遗留串。
+
+⚠️ **补建历史版本的 Release 会抢走 Latest 徽标** —— Latest 按**发布时间**算而非版本号。
+补完立刻 `gh release edit <真正的最新版> --latest` 标回来。
+
 ## GitHub 发布流程（v2.1.13 实操记录）
 
 **触发关系（2026-09-17 实测）**：
@@ -1258,8 +1313,10 @@ bash tools/check_vcxproj_sources.sh
 **标准顺序**（用户口径：**release 跑完才能跑 Docker**）：
 1. `git push origin dev`（提交先推）
 2. `git tag vX.Y.Z && git push origin vX.Y.Z`（**轻量 tag**，与 v2.1.11 / v2.1.12 一致）
-3. 等**该 SHA 上所有 run** 结束且全绿：
-   `gh run list -R rebecca554owen/openppp2 --commit <sha> --limit 20 --json workflowName,status,conclusion`
+3. 等 **tag 触发的 4 个构建 run** + `Build · Go Guardian` 结束且全绿：
+   `gh run list -R rebecca554owen/openppp2 --commit <完整SHA> --limit 20 --json workflowName,status,conclusion`
+   ⇒ **`Test · Unit` 不是发布门禁**：它由 branch push 触发，`release.yml` 只从 6 个构建
+   workflow 下载产物，不读单测结果。等它变绿会让发布白等好几分钟。
 4. `gh workflow run release.yml -R rebecca554owen/openppp2 -f tag=vX.Y.Z -f title=vX.Y.Z`
 5. release 成功后再 `gh workflow run build-docker.yml -R rebecca554owen/openppp2 -f tag=vX.Y.Z -f arch=all`
 
@@ -1302,37 +1359,41 @@ ppp --help | grep -i Version    # 两端一致；本地源码树未打 CI tag �
 | 位置 | 地址 | 用途 |
 |------|------|------|
 | **本机（首选）** | `http://127.0.0.1:9092/<file>`（`http_server_node.js` 提供） | 本地自洽，唯一无外部依赖的方式 |
-| **公网 ppp（node 源站，2026-10-16 新增）** | `http://154.31.112.162:9092/test<N>mb.bin` | 测公网 ppp 的入口：dmit:9092（FRP）→ 隧道 → NAS node 容器。**⚠️ ≤10MB 稳定；>10MB 会卡死/截断（Static Echo bug，见下节），只用于连通性/小文件测试** |
-| dmit 公网 8081 | `http://154.31.112.162:8081/backend/garbage.php?ckSize=N` | 旧 docker `speedtest`（PHP，**未换 node**）；走数据面不走 FRP，公网大流量测速用这个 |
+| **公网 ppp（dmit node 源站，2026-10-16）** | `http://154.31.112.162:9092/test<N>mb.bin` | dmit 上的测速源站。**公网 ppp 正确测法**：经 NAS 代理 `curl -x http://192.168.100.10:7893`（IPv4 组）/ `7894`（IPv6 组）访问；直连作对照基线。实测 100MB：直连 43.8、经 7893 35.6、经 7894 36.6 MB/s |
+| dmit 公网 8081 | `http://154.31.112.162:8081/backend/garbage.php?ckSize=N` | 旧 docker `speedtest`（PHP，未换 node）；PHP 动态生成，可当公网大流量的备用入口 |
 | NAS 内网 | `http://192.168.100.10:8081/backend/garbage.php?ckSize=N` | 内网低延迟（docker `librespeed`）；**换台机器可能够不到，别当默认** |
 
-## 远端公网测试源站（NAS node 容器 + FRP 暴露，2026-10-16 实操）
+## 远端公网测试源站（dmit node 容器，2026-10-16 实操）
 
-**用户口径：测试源站统一用 nodejs 方案（比 PHP/docker speedtest 稳定、支持更好）。**
+**用户口径：测试源站统一用 nodejs 方案（比 PHP/docker speedtest 稳定、支持更好）；公网 ppp 测速走数据面（7893/7894 代理），不用 FRP。**
 
-NAS 宿主机没有 node，用容器跑（`--network host`：node 在容器内监听 127.0.0.1:9092 = 宿主机回环，
-**不直接对公网暴露**，只有 ppp FRP 能连它；不要用 `-p` 端口映射——node 默认监听 127.0.0.1，`-p` 进不来）：
+dmit 上的 node 容器（`--network host` + 第三个参数 `0.0.0.0`：源站脚本默认只听回环，
+公网源站必须显式传 host；dmit 防火墙 INPUT ACCEPT，无需放行）：
 
 ```bash
-# 文件：/root/ppp-testfiles/test{1,10,32,100,1024}mb.bin（dd 生成）
-# 脚本：/root/http_server_node.js（skill scripts/ 的副本）
+# 文件：/root/ppp-testfiles/test{1,10,100,1024}mb.bin（dd 生成）
+# 脚本：/root/http_server_node.js（skill scripts/ 副本，支持第 3 个 host 参数）
 docker run -d --name ppp-node-src --restart unless-stopped --network host \
   -v /root/ppp-testfiles:/files:ro -v /root/http_server_node.js:/srv/server.js:ro \
-  -w /srv node:22-alpine node server.js 9092 /files
+  -w /srv node:22-alpine node server.js 9092 /files 0.0.0.0
 ```
 
-经 FRP 暴露到公网 —— `/opt/ppp/appsettings.json` 的 `client.mappings` 加一条（先备份，改完 `systemctl restart ppp`；
-dmit 侧 ppp 会**动态**监听 :9092，无需动 dmit 配置；dmit 防火墙 INPUT ACCEPT，新端口不需要放行）：
+**公网 ppp 测速姿势**（Mac 上执行，经 NAS 的 ppp 代理端口过隧道；NAS 7893/7894 监听 `*`，内网可直连）：
 
-```json
-{"local-ip": "127.0.0.1", "local-port": 9092, "protocol": "tcp", "remote-ip": "::", "remote-port": 9092}
+```bash
+B=http://154.31.112.162:9092/test100mb.bin
+curl -x http://192.168.100.10:7894 -o /dev/null -w "7894(实验/IPv6): %{speed_download}B/s\n" $B
+curl -x http://192.168.100.10:7893 -o /dev/null -w "7893(对照/IPv4): %{speed_download}B/s\n" $B
+curl -o /dev/null -w "直连对照(不过隧道): %{speed_download}B/s\n" $B
 ```
 
-> 🚨 **Static Echo（FRP）通道大流量 bug（2026-10-16 实测，issue 级别）**：
-> 1MB × 3 全过（0.5-2.5s）；10MB × 2 完整（5-9 MB/s）；**100MB 卡死**（60s 只出 1MB / 0.8s 空回复）；
-> **32MB 返回 200 但 body 截断成 3MB（数据损坏级别，curl 不报错）**；
-> 同时刻同组 7893 代理出现一次瞬断 000（约 5s 后自愈，用户隧道无恙）。
-> ⇒ **不要从 FRP 入口压大流量**；公网大流量测速走 8081（数据面）。影响面与阈值待深挖（vmux Static Echo 流控）。
+2026-10-16 实测（100MB）：直连 43.8 MB/s；经 7893 35.6 MB/s；经 7894 36.6 MB/s（隧道开销 ~16%）。
+
+> 🚨 **Static Echo（FRP）通道大流量 bug（2026-10-16 实测，issue 级别；FRP 测速方案已废弃，结论仍有效）**：
+> 曾试「NAS 源站 + `client.mappings` 9092 暴露」：1MB/10MB 全过（5-9 MB/s）；100MB 卡死（60s 只出 1MB / 空回复）；
+> **32MB 返回 200 但 body 截断成 3MB（数据损坏级别，curl 不报错）**；同时刻同组 7893 代理瞬断一次 000（~5s 自愈）。
+> ⇒ **绝不通过 mapping 暴露大流量源站**，FRP 通道只跑 SSH/小流量。
+> ⚠️ 若 dmit 源站容器与 ppp FRP 监听抢同一端口会 `EADDRINUSE`（容器 unless-stopped 会反复重启）——错开端口或删干净 mapping。
 
 ## 服务端 TUI
 
