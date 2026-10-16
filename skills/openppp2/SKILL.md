@@ -716,6 +716,9 @@ dmit :3023    → SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u7
 > 即"该暴露 3022 的实际暴露了 22"。改完记得用上面的 banner 法验证。
 
 > ⚠️ **两个客户端的 `remote-port` 必须不同**，否则会撞 `MappingEntryConflict`。
+>
+> 🚨 **FRP 通道（Static Echo）大流量 >10MB 会卡死/截断**（2026-10-16 实测，32MB 出现「200 + body 截到 3MB」的数据损坏；
+> 详见「远端公网测试源站」节）—— mapping 只跑 SSH/小流量，**不要用来暴露压测源站推大流量**。
 
 ## macOS 启动权限与 release 二进制更新
 
@@ -1299,8 +1302,37 @@ ppp --help | grep -i Version    # 两端一致；本地源码树未打 CI tag �
 | 位置 | 地址 | 用途 |
 |------|------|------|
 | **本机（首选）** | `http://127.0.0.1:9092/<file>`（`http_server_node.js` 提供） | 本地自洽，唯一无外部依赖的方式 |
-| dmit 公网 | `http://154.31.112.162:8081/backend/garbage.php?ckSize=N` | 只在需要真实远端链路时用（docker `speedtest`） |
+| **公网 ppp（node 源站，2026-10-16 新增）** | `http://154.31.112.162:9092/test<N>mb.bin` | 测公网 ppp 的入口：dmit:9092（FRP）→ 隧道 → NAS node 容器。**⚠️ ≤10MB 稳定；>10MB 会卡死/截断（Static Echo bug，见下节），只用于连通性/小文件测试** |
+| dmit 公网 8081 | `http://154.31.112.162:8081/backend/garbage.php?ckSize=N` | 旧 docker `speedtest`（PHP，**未换 node**）；走数据面不走 FRP，公网大流量测速用这个 |
 | NAS 内网 | `http://192.168.100.10:8081/backend/garbage.php?ckSize=N` | 内网低延迟（docker `librespeed`）；**换台机器可能够不到，别当默认** |
+
+## 远端公网测试源站（NAS node 容器 + FRP 暴露，2026-10-16 实操）
+
+**用户口径：测试源站统一用 nodejs 方案（比 PHP/docker speedtest 稳定、支持更好）。**
+
+NAS 宿主机没有 node，用容器跑（`--network host`：node 在容器内监听 127.0.0.1:9092 = 宿主机回环，
+**不直接对公网暴露**，只有 ppp FRP 能连它；不要用 `-p` 端口映射——node 默认监听 127.0.0.1，`-p` 进不来）：
+
+```bash
+# 文件：/root/ppp-testfiles/test{1,10,32,100,1024}mb.bin（dd 生成）
+# 脚本：/root/http_server_node.js（skill scripts/ 的副本）
+docker run -d --name ppp-node-src --restart unless-stopped --network host \
+  -v /root/ppp-testfiles:/files:ro -v /root/http_server_node.js:/srv/server.js:ro \
+  -w /srv node:22-alpine node server.js 9092 /files
+```
+
+经 FRP 暴露到公网 —— `/opt/ppp/appsettings.json` 的 `client.mappings` 加一条（先备份，改完 `systemctl restart ppp`；
+dmit 侧 ppp 会**动态**监听 :9092，无需动 dmit 配置；dmit 防火墙 INPUT ACCEPT，新端口不需要放行）：
+
+```json
+{"local-ip": "127.0.0.1", "local-port": 9092, "protocol": "tcp", "remote-ip": "::", "remote-port": 9092}
+```
+
+> 🚨 **Static Echo（FRP）通道大流量 bug（2026-10-16 实测，issue 级别）**：
+> 1MB × 3 全过（0.5-2.5s）；10MB × 2 完整（5-9 MB/s）；**100MB 卡死**（60s 只出 1MB / 0.8s 空回复）；
+> **32MB 返回 200 但 body 截断成 3MB（数据损坏级别，curl 不报错）**；
+> 同时刻同组 7893 代理出现一次瞬断 000（约 5s 后自愈，用户隧道无恙）。
+> ⇒ **不要从 FRP 入口压大流量**；公网大流量测速走 8081（数据面）。影响面与阈值待深挖（vmux Static Echo 流控）。
 
 ## 服务端 TUI
 
