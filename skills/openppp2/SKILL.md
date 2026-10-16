@@ -1163,7 +1163,7 @@ bash tools/check_vcxproj_sources.sh
 - the LAN host 两套 systemd client 都使用 `--tun-host=no --tun-mux=10 --mux-mode=flow --tcp-stack=xtcp`。
   > 🚨 **参数名坑（2026-10-16 实测修正）**：the LAN host 两个单元文件曾一直带着改名前的旧参数
   > `--tun-tcpip=xtcp`（v2.1.15 起改名，见本文 248 行），**被新版二进制静默忽略 → 实际跑的是 native 栈**，
-  > 后果：公网高并发小文件 N% 失败（the size×3000 c=50 只成 1670）+ 吞吐低 N%+。
+  > 后果：公网高并发小文件**大量失败**且吞吐显著降低（XTCP 修正后全部消失）。
   > 已把两个单元 sed 成 `--tcp-stack=xtcp`（备份 `*.bak-20261016*`）。
   > **核对手法**：`grep ExecStart /etc/systemd/system/ppp*.service | grep tcp-stack`；升级/换机后必查。
 - macOS 本地测试不照搬远端并发数，固定 `concurrent=10` 与本机 `hw.ncpu` 一致；复用的是双方已互通的 framing、crypto key、GCM 和 TA 参数。
@@ -1364,7 +1364,7 @@ ppp --help | grep -i Version    # 两端一致；本地源码树未打 CI tag �
 | 位置 | 地址 | 用途 |
 |------|------|------|
 | **本机（首选）** | `http://127.0.0.1:N/<file>`（`http_server_node.js` 提供） | 本地自洽，唯一无外部依赖的方式 |
-| **公网 ppp（the VPS node 源站，N-N-N）** | `http://the address:N/test<N>mb.bin` | the VPS 上的测速源站。**从 Mac 测会被 Mac↔the LAN host 的 Wi-Fi 段限流（~the measured rate ≈ the measured rate）**——精确测法：SSH 到 the LAN host 本机 `curl -x http://127.0.0.1:the port` 多并发聚合（见「远端公网测试源站」节）。**隧道 IPv6 下载方向实测 ~N-the measured rate**（用户 speedtest 经隧道 the measured rate 吻合）；Upload the measured rate 是家宽上行限制，非隧道问题 |
+| **公网 ppp（the VPS node 源站，N-N-N）** | `http://the address:N/test<N>mb.bin` | the VPS 上的测速源站。**⚠️ 从 Mac 经 the LAN host:789x 测会被 Mac↔the LAN host 的 Wi-Fi 段限流，数字不代表隧道能力**——吞吐测试必须 SSH 到 the LAN host 本机多并发聚合（命令见「远端公网测试源站」节） |
 | the VPS 公网 the port | `http://the address:the port/backend/garbage.php?ckSize=N` | 旧 docker `speedtest`（PHP，未换 node）；PHP 动态生成，可当公网大流量的备用入口 |
 | the LAN host 内网 | `http://the address:the port/backend/garbage.php?ckSize=N` | 内网低延迟（docker `librespeed`）；**换台机器可能够不到，别当默认** |
 
@@ -1376,29 +1376,37 @@ the VPS 上的 node 容器（`--network host` + 第三个参数 `0.0.0.0`：源�
 公网源站必须显式传 host；the VPS 防火墙 INPUT ACCEPT，无需放行）：
 
 ```bash
-# 文件：the local path{1,10,100,1024}mb.bin（dd 生成）
-# 脚本：the local path（skill scripts/ 副本，支持第 3 个 host 参数）
+# 文件：the local path（dd 生成；the VPS 只有 the size 内存，源站脚本已改为大文件流式）
+# 脚本：the local path（skill scripts/ 副本；>the size 流式、≤the size 内存缓存）
 docker run -d --name ppp-node-src --restart unless-stopped --network host \
   -v the local path:/files:ro -v the local path:/srv/server.js:ro \
   -w /srv node:22-alpine node server.js 9092 /files 0.0.0.0
 ```
 
-**公网 ppp 测速姿势**（Mac 上执行，经 the LAN host 的 ppp 代理端口过隧道；the LAN host the port/the port 监听 `*`，内网可直连）：
+> ⚠️ **the VPS 是 the size 内存 VPS**（free 总量 the size）：源站内存模式缓存 the size 文件会直接把机器打爆
+> （2026-10-16 实测 node 崩溃重启、6×the size 请求全灭）。脚本已加 `STREAM_THRESHOLD=32MB`：
+> 小文件仍走内存（测错误率够快），大文件 `createReadStream` 流式（测吞吐不涨 RSS）。
+
+**公网 ppp 吞吐的精确测法**（SSH 到 the LAN host 本机执行，多并发聚合；从 Mac 侧测会被 Wi-Fi 段限流，数字偏低不代表隧道能力）：
 
 ```bash
-B=http://the address:9092/test100mb.bin
-curl -x http://the address:the port -o /dev/null -w "the port(实验/IPv6): %{speed_download}B/s\n" $B
-curl -x http://the address:the port -o /dev/null -w "the port(对照/IPv4): %{speed_download}B/s\n" $B
-curl -o /dev/null -w "直连对照(不过隧道): %{speed_download}B/s\n" $B
+for i in 1 2 3 4 5 6; do
+  curl -s -o /dev/null --max-time 60 -w "%{speed_download}\n" \
+    -x http://127.0.0.1:the port http://the address:9092/test100mb.bin &
+done; wait   # 各行 speed_download 相加 ×8 = 聚合 Mbps（the port 同理换 IPv4 组）
 ```
 
-2026-10-16 实测（**xtcp 参数修正后**）：
-- **⚠️ 从 Mac 经 the LAN host:789x 测会被 Wi-Fi 段限流（the measured rate ≈ the measured rate），不代表隧道能力**。
-- **精确测法（SSH 到 the LAN host 本机，6 并发 × the size 经 the port）**：聚合 the measured rate ≈ **the measured rate** —
-  与用户 speedtest（Mac 经 mihomo→隧道→the VPS 出口，Linode Tokyo 下载）的 **the measured rate** 吻合
-  ⇒ **隧道 IPv6 下载方向真实能力 ≈ 810-the measured rate**。Upload the measured rate 是家宽上行限制，非隧道问题。
-- the size × 1000 c=50（Mac 侧，受 Wi-Fi 限流）：IPv4/IPv6 双路 1000/1000 全 200，436/the measured rate，零错误。
-- 对照：native 栈时期 the size 单流仅 285/the measured rate 且 the size×3000 c=50 有 N% 失败（见部署章节参数名坑）。
+> 💡 终端侧 speedtest（经 mihomo→隧道→the VPS 出口）的 Upload 偏低是**家宽上行限制**，与隧道无关；
+> 下载方向才能反映隧道能力。测试时注意用户 mihomo 流量与压测共用隧道，会互相挤占。
+
+> 🚨 **公网大文件长传输会被掐（2026-10-16 实测，issue 级别）**：the LAN host 本机经 the port 单条拉
+> the VPS:9092 大文件，the size（~Ns）能完整过；**the size 在 the size/the size 处被断（curl exit=18 partial file）**；
+> 6 并发 × the size 每条 Ns 即断。速率本身能到 576-the measured rate（断前）。the LAN host journal 见 mux 子链路
+> `record header read FAILED err=101`（ECANCELED）+ `socket closed role=child`。
+> **两端 ppp 资源全程平稳**（the VPS server RSS 11-the size / the LAN host client ~the size）——不是资源瓶颈，
+> 疑似**饱和流量把 mux 控制帧/keepalive 饿死 → 链路超时重连 → 在途 flow 被杀**（本地回环
+> 带宽富余从不复现）。深挖方向：mux 链路 keepalive 与数据帧的队列公平性。
+> **规避**：公网吞吐测试用 ≤the size 文件多并发聚合（能完整跑完），别用单条 GB 级长传输。
 
 > 🚨 **Static Echo（FRP）通道大流量 bug（2026-10-16 实测，issue 级别；FRP 测速方案已废弃，结论仍有效）**：
 > 曾试「the LAN host 源站 + `client.mappings` 9092 暴露」：the size/the size 全过（5-the measured rate）；the size 卡死（Ns 只出 the size / 空回复）；

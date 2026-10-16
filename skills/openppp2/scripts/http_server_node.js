@@ -26,8 +26,11 @@ const directory = process.argv[3] || '/tmp';
 const host = process.argv[4] || '127.0.0.1';
 
 // Lazy cache: first request for a file reads it from disk, all later requests
-// hit the in-memory Buffer (zero disk I/O).
+// hit the in-memory Buffer (zero disk I/O). Files larger than STREAM_THRESHOLD
+// always stream from disk instead — a small-VPS origin (e.g. 1 GB RAM) would
+// otherwise OOM on the first big-file request.
 const cache = new Map();
+const STREAM_THRESHOLD = 32 * 1024 * 1024;
 
 const server = http.createServer((req, res) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -42,6 +45,19 @@ const server = http.createServer((req, res) => {
   let body = cache.get(file);
   if (body === undefined) {
     try {
+      const st = fs.statSync(file);
+      if (st.size > STREAM_THRESHOLD) {
+        res.writeHead(200, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': st.size,
+        });
+        if (req.method === 'HEAD') {
+          res.end();
+          return;
+        }
+        fs.createReadStream(file).pipe(res);
+        return;
+      }
       body = fs.readFileSync(file);
       cache.set(file, body);
     } catch {
