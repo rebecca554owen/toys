@@ -4,7 +4,7 @@
 # 功能：
 #   1. 本地编译产物验证：macOS 原生 ppp + Android .so（NDK arm64-v8a）
 #   2. 启动本地双端（server + client），tun-host=no 避免占用 utun
-#   3. 客户端矩阵：mode=client|proxy × mux=0|10 × mode=compat|flow|flow+turbo × xtcp=on|off
+#   3. 客户端矩阵：mode=client|proxy × mux=0|10 × mmode=compat|flow（mux=0 只跑 compat）
 #   4. 循环压测：--rounds N --mb M --url URL1|URL2|完整地址
 #
 # 测速源约定：
@@ -14,7 +14,7 @@
 #
 # 用法示例：
 #   ppp-bench.sh matrix                          # 跑全矩阵（每格 100 轮 10MB）
-#   ppp-bench.sh run --mode proxy --mux 10 --mmode flow --turbo y --xtcp y \
+#   ppp-bench.sh run --mode proxy --mux 10 --mmode flow
 #                  --rounds 65536 --mb 1         # 单组合万次小包
 #   ppp-bench.sh stop                            # 停掉双端
 #
@@ -57,17 +57,17 @@ start_server() {
 }
 
 start_client() {
-    local mode=$1 mux=$2 mmode=$3 turbo=$4 xtcp=$5 tag=$6
+    local mode=$1 mux=$2 mmode=$3 tag=$4
     pkill -f "bin/ppp --mode=(proxy|client)" 2>/dev/null
     sleep 2
     local args="--mode=$mode --config=$CFG_CLI --tun-host=no --tun-vnet=no --tun-mux=$mux --tun-mux-acceleration=3"
     [ "$mmode" != "-" ] && args="$args --mux-mode=$mmode"
-    [ "$turbo" = "y" ] && args="$args --mux-mode-turbo=true"
-    [ "$xtcp" = "y" ] && args="$args --tcp-stack=xtcp"
+    # 不传 --tcp-stack：xtcp 仅 Linux 可用，macOS 传了也会静默回退 native
+    # 不传 --mux-mode-turbo：该 flag 已从 CLI 移除
     (cd "$REPO_DIR" && nohup ./bin/ppp $args > "$LOG_DIR/client-$tag.log" 2>&1 &)
     sleep 8
     grep -q "AppAlreadyRunning" "$LOG_DIR/client-$tag.log" && { log "client 启动失败: 端口占用"; return 1; }
-    log "client 启动 OK: mode=$mode mux=$mux mmode=$mmode turbo=$turbo xtcp=$xtcp"
+    log "client 启动 OK: mode=$mode mux=$mux mmode=$mmode"
 }
 
 build_all() {
@@ -106,21 +106,16 @@ matrix() {
     for mode in client proxy; do
         for mux in 0 10; do
             for mmode in compat flow; do
-                for turbo in n y; do
-                    # flow+turbo 只在 flow 下有意义；mux=0 时跳过 flow 变体
-                    { [ "$mmode" = "flow" ] || [ "$turbo" = "n" ]; } || continue
-                    { [ "$mux" != "0" ] || [ "$mmode" = "compat" ]; } || continue
-                    for xtcp in n y; do
-                        local tag="${mode}-mux${mux}-${mmode}$( [ "$turbo" = y ] && echo -turbo )-$( [ "$xtcp" = y ] && echo xtcp)"
-                        start_client "$mode" "$mux" "$mmode" "$turbo" "$xtcp" "$tag" || continue
-                        # client 模式没有 http 代理端口，204 探针代替 curl bench
-                        if [ "$mode" = "client" ]; then
-                            log "[$tag] client 模式无代理端口，跳过 HTTP bench（数据面由 TUN/内核侧验证）"
-                            continue
-                        fi
-                        run_bench "$rounds" "$mb" "$url" "$tag" "http://127.0.0.1:$CLI_PORT"
-                    done
-                done
+                # mux=0 时没有多链路，跳过 flow 变体
+                { [ "$mux" != "0" ] || [ "$mmode" = "compat" ]; } || continue
+                local tag="${mode}-mux${mux}-${mmode}"
+                start_client "$mode" "$mux" "$mmode" "$tag" || continue
+                # client 模式没有 http 代理端口，204 探针代替 curl bench
+                if [ "$mode" = "client" ]; then
+                    log "[$tag] client 模式无代理端口，跳过 HTTP bench（数据面由 TUN/内核侧验证）"
+                    continue
+                fi
+                run_bench "$rounds" "$mb" "$url" "$tag" "http://127.0.0.1:$CLI_PORT"
             done
         done
     done
@@ -132,15 +127,13 @@ case "${1:-help}" in
     stop)   stop_all ;;
     matrix) shift; matrix "$@" ;;
     run)    shift
-            local_mode=proxy local_mux=10 local_mmode=flow local_turbo=n local_xtcp=n
+            local_mode=proxy local_mux=10 local_mmode=flow
             rounds=100 mb=10 url="$URL_LOCAL"
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --mode)  local_mode=$2; shift 2 ;;
                     --mux)   local_mux=$2; shift 2 ;;
                     --mmode) local_mmode=$2; shift 2 ;;
-                    --turbo) local_turbo=$2; shift 2 ;;
-                    --xtcp)  local_xtcp=$2; shift 2 ;;
                     --rounds) rounds=$2; shift 2 ;;
                     --mb)    mb=$2; shift 2 ;;
                     --url)   url=$2; shift 2 ;;
@@ -149,10 +142,8 @@ case "${1:-help}" in
             done
             build_all || exit 1
             start_server || exit 1
-            start_client "$local_mode" "$local_mux" "$local_mmode" "$local_turbo" "$local_xtcp" "run"
             tag="run-${local_mode}-mux${local_mux}-${local_mmode}"
-            [ "$local_turbo" = y ] && tag="${tag}-turbo"
-            [ "$local_xtcp" = y ] && tag="${tag}-xtcp"
+            start_client "$local_mode" "$local_mux" "$local_mmode" "$tag"
             run_bench "$rounds" "$mb" "$url" "$tag" \
                       "http://127.0.0.1:$CLI_PORT"
             ;;
@@ -163,12 +154,10 @@ case "${1:-help}" in
       --mode proxy|client   客户端模式(默认 proxy)
       --mux 0|10            mux 通道数(默认 10)
       --mmode compat|flow   mux 模式(默认 flow)
-      --turbo y|n           turbo 开关(默认 n, 仅 flow 有效)
-      --xtcp y|n            xtcp 栈开关(默认 n)
       --rounds N            循环次数(默认 100)
       --mb M                每轮体积 MB(默认 10)
       --url URL             测速源: URL1=http://127.0.0.1:8081(本地容器)
                                    URL2=http://192.168.100.10:8081(NAS 内网)
                                    或任意完整 base 地址
-  ppp-bench.sh matrix <rounds> <mb> <url>  全矩阵(client/proxy × mux0/10 × compat/flow/flow+turbo × xtcp on/off)" ;;
+  ppp-bench.sh matrix <rounds> <mb> <url>  全矩阵(client/proxy × mux0/10 × compat/flow)" ;;
 esac

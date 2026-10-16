@@ -1160,7 +1160,16 @@ bash tools/check_vcxproj_sources.sh
 - dmit `ppp`（`:2025`）是稳定服务端，当前 `concurrent=1`；`ppp2`（`:2030`）是实验服务端，当前 `concurrent=1`。
 - NAS `ppp` 是连接 `:2025` 的客户端（HTTP `7893`、SOCKS `1083`），使用 **IPv4**。
 - NAS `ppp2` 是连接 `:2030` 的客户端（HTTP `7894`、SOCKS `1084`），使用 **IPv6**（`[2403:18c0:1000:fa:94b9:dcff:fe32:ba9d]`）。
-- NAS 两套 systemd client 都使用 `--tun-host=no --tun-mux=10 --mux-mode=flow --tcp-stack=xtcp`。
+- NAS 两套 systemd client 都使用 `--tun-host=no --tun-mux=10 --mux-mode=flow`，并且**历史上写的是 `--tun-tcpip=xtcp`（2026-10-16 前的实测记录）**。
+  ⚠️ **`--tun-tcpip` 这个 flag 已在 v2.1.15 改名为 `--tcp-stack`，旧名会被静默忽略**（退出码 0、不报错、不生效）。
+  ⇒ 这条记录**尚未核实**：要么 NAS 单元至今仍传旧名（那两套 client 实际没在走 XTCP），
+  要么早已改成新名（在走 XTCP）。**部署前先 `systemctl cat` 读实际启动参数，别照抄这里。**
+  注意：把旧名改成 `--tcp-stack=xtcp` 会**立刻让 client 真的切到 XTCP 数据面**，那是行为变更不是修笔误。
+  > 🚨 **参数名坑（2026-10-16 实测修正）**：NAS 两个单元文件曾一直带着改名前的旧参数
+  > `--tun-tcpip=xtcp`（v2.1.15 起改名，见本文 248 行），**被新版二进制静默忽略 → 实际跑的是 native 栈**，
+  > 后果：公网高并发小文件 44% 失败（1MB×3000 c=50 只成 1670）+ 吞吐低 40%+。
+  > 已把两个单元 sed 成 `--tcp-stack=xtcp`（备份 `*.bak-20261016*`）。
+  > **核对手法**：`grep ExecStart /etc/systemd/system/ppp*.service | grep tcp-stack`；升级/换机后必查。
 - macOS 本地测试不照搬远端并发数，固定 `concurrent=10` 与本机 `hw.ncpu` 一致；复用的是双方已互通的 framing、crypto key、GCM 和 TA 参数。
 - NAS 和 dmit 都使用 systemd 托管，升级前备份旧二进制，替换后 `systemctl restart`。
 - 运行中的 Linux 二进制不能直接覆盖，先准备备份和回滚路径。
@@ -1359,7 +1368,7 @@ ppp --help | grep -i Version    # 两端一致；本地源码树未打 CI tag �
 | 位置 | 地址 | 用途 |
 |------|------|------|
 | **本机（首选）** | `http://127.0.0.1:9092/<file>`（`http_server_node.js` 提供） | 本地自洽，唯一无外部依赖的方式 |
-| **公网 ppp（dmit node 源站，2026-10-16）** | `http://154.31.112.162:9092/test<N>mb.bin` | dmit 上的测速源站。**公网 ppp 正确测法**：经 NAS 代理 `curl -x http://192.168.100.10:7893`（IPv4 组）/ `7894`（IPv6 组）访问；直连作对照基线。实测 100MB：直连 43.8、经 7893 35.6、经 7894 36.6 MB/s |
+| **公网 ppp（dmit node 源站，2026-10-16）** | `http://154.31.112.162:9092/test<N>mb.bin` | dmit 上的测速源站。**公网 ppp 正确测法**：经 NAS 代理 `curl -x http://192.168.100.10:7893`（IPv4 组）/ `7894`（IPv6 组）访问；直连作对照。**XTCP 修正后基线**：1MB×3000 c=50 → IPv4 395 Mbps / IPv6 680 Mbps（双 0% 错误）；IPv6 隧道显著快于 IPv4 |
 | dmit 公网 8081 | `http://154.31.112.162:8081/backend/garbage.php?ckSize=N` | 旧 docker `speedtest`（PHP，未换 node）；PHP 动态生成，可当公网大流量的备用入口 |
 | NAS 内网 | `http://192.168.100.10:8081/backend/garbage.php?ckSize=N` | 内网低延迟（docker `librespeed`）；**换台机器可能够不到，别当默认** |
 
@@ -1387,7 +1396,9 @@ curl -x http://192.168.100.10:7893 -o /dev/null -w "7893(对照/IPv4): %{speed_d
 curl -o /dev/null -w "直连对照(不过隧道): %{speed_download}B/s\n" $B
 ```
 
-2026-10-16 实测（100MB）：直连 43.8 MB/s；经 7893 35.6 MB/s；经 7894 36.6 MB/s（隧道开销 ~16%）。
+2026-10-16 实测（**xtcp 参数修正后**）：100MB 单流 — 直连对照 375 Mbps、IPv4 214 Mbps、IPv6 378 Mbps（单流波动大，看聚合）；
+**1MB × 3000 c=50 聚合** — IPv4 50.5 MB/s ≈ **395 Mbps**（3000/3000，0 错误）、IPv6 85 MB/s ≈ **680 Mbps**（3000/3000，0 错误）。
+对照：修正前（native 栈）100MB 单流 IPv4 285 / IPv6 293 Mbps，且 1MB×3000 c=50 有 44% 失败。
 
 > 🚨 **Static Echo（FRP）通道大流量 bug（2026-10-16 实测，issue 级别；FRP 测速方案已废弃，结论仍有效）**：
 > 曾试「NAS 源站 + `client.mappings` 9092 暴露」：1MB/10MB 全过（5-9 MB/s）；100MB 卡死（60s 只出 1MB / 空回复）；
