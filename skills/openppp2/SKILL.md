@@ -1160,7 +1160,16 @@ bash tools/check_vcxproj_sources.sh
 - the VPS `ppp`（`:the port`）是稳定服务端，当前 `concurrent=1`；`ppp2`（`:the port`）是实验服务端，当前 `concurrent=1`。
 - the LAN host `ppp` 是连接 `:the port` 的客户端（HTTP `the port`、SOCKS `the port`），使用 **IPv4**。
 - the LAN host `ppp2` 是连接 `:the port` 的客户端（HTTP `the port`、SOCKS `the port`），使用 **IPv6**（`[the IPv6 endpoint]`）。
-- the LAN host 两套 systemd client 都使用 `--tun-host=no --tun-mux=10 --mux-mode=flow --tcp-stack=xtcp`。
+- the LAN host 两套 systemd client 都使用 `--tun-host=no --tun-mux=10 --mux-mode=flow`，并且**历史上写的是 `--tun-tcpip=xtcp`（2026-10-16 前的实测记录）**。
+  ⚠️ **`--tun-tcpip` 这个 flag 已在 v2.1.15 改名为 `--tcp-stack`，旧名会被静默忽略**（退出码 0、不报错、不生效）。
+  ⇒ 这条记录**尚未核实**：要么 the LAN host 单元至今仍传旧名（那两套 client 实际没在走 XTCP），
+  要么早已改成新名（在走 XTCP）。**部署前先 `systemctl cat` 读实际启动参数，别照抄这里。**
+  注意：把旧名改成 `--tcp-stack=xtcp` 会**立刻让 client 真的切到 XTCP 数据面**，那是行为变更不是修笔误。
+  > 🚨 **参数名坑（2026-10-16 实测修正）**：the LAN host 两个单元文件曾一直带着改名前的旧参数
+  > `--tun-tcpip=xtcp`（v2.1.15 起改名，见本文 248 行），**被新版二进制静默忽略 → 实际跑的是 native 栈**，
+  > 后果：公网高并发小文件 N% 失败（the size×3000 c=50 只成 1670）+ 吞吐低 N%+。
+  > 已把两个单元 sed 成 `--tcp-stack=xtcp`（备份 `*.bak-20261016*`）。
+  > **核对手法**：`grep ExecStart /etc/systemd/system/ppp*.service | grep tcp-stack`；升级/换机后必查。
 - macOS 本地测试不照搬远端并发数，固定 `concurrent=10` 与本机 `hw.ncpu` 一致；复用的是双方已互通的 framing、crypto key、GCM 和 TA 参数。
 - the LAN host 和 the VPS 都使用 systemd 托管，升级前备份旧二进制，替换后 `systemctl restart`。
 - 运行中的 Linux 二进制不能直接覆盖，先准备备份和回滚路径。
@@ -1359,7 +1368,7 @@ ppp --help | grep -i Version    # 两端一致；本地源码树未打 CI tag �
 | 位置 | 地址 | 用途 |
 |------|------|------|
 | **本机（首选）** | `http://127.0.0.1:N/<file>`（`http_server_node.js` 提供） | 本地自洽，唯一无外部依赖的方式 |
-| **公网 ppp（the VPS node 源站，N-N-N）** | `http://the address:N/test<N>mb.bin` | the VPS 上的测速源站。**公网 ppp 正确测法**：经 the LAN host 代理 `curl -x http://the address:the port`（IPv4 组）/ `the port`（IPv6 组）访问；直连作对照基线。实测 the size：直连 N、经 the port N、经 the port the measured rate |
+| **公网 ppp（the VPS node 源站，N-N-N）** | `http://the address:N/test<N>mb.bin` | the VPS 上的测速源站。**公网 ppp 正确测法**：经 the LAN host 代理 `curl -x http://the address:the port`（IPv4 组）/ `the port`（IPv6 组）访问；直连作对照。**XTCP 修正后基线**：the size×N c=N → IPv4 the measured rate / IPv6 the measured rate（双 N% 错误）；IPv6 隧道显著快于 IPv4 |
 | the VPS 公网 the port | `http://the address:the port/backend/garbage.php?ckSize=N` | 旧 docker `speedtest`（PHP，未换 node）；PHP 动态生成，可当公网大流量的备用入口 |
 | the LAN host 内网 | `http://the address:the port/backend/garbage.php?ckSize=N` | 内网低延迟（docker `librespeed`）；**换台机器可能够不到，别当默认** |
 
@@ -1387,7 +1396,9 @@ curl -x http://the address:the port -o /dev/null -w "the port(对照/IPv4): %{sp
 curl -o /dev/null -w "直连对照(不过隧道): %{speed_download}B/s\n" $B
 ```
 
-2026-10-16 实测（the size）：直连 the measured rate；经 the port the measured rate；经 the port the measured rate（隧道开销 ~N%）。
+2026-10-16 实测（**xtcp 参数修正后**）：the size 单流 — 直连对照 the measured rate、IPv4 the measured rate、IPv6 the measured rate（单流波动大，看聚合）；
+**the size × 3000 c=50 聚合** — IPv4 the measured rate ≈ **the measured rate**（3000/3000，0 错误）、IPv6 the measured rate ≈ **the measured rate**（3000/3000，0 错误）。
+对照：修正前（native 栈）the size 单流 IPv4 285 / IPv6 the measured rate，且 the size×3000 c=50 有 N% 失败。
 
 > 🚨 **Static Echo（FRP）通道大流量 bug（2026-10-16 实测，issue 级别；FRP 测速方案已废弃，结论仍有效）**：
 > 曾试「the LAN host 源站 + `client.mappings` 9092 暴露」：the size/the size 全过（5-the measured rate）；the size 卡死（Ns 只出 the size / 空回复）；
