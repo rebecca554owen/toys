@@ -1364,7 +1364,7 @@ ppp --help | grep -i Version    # 两端一致；本地源码树未打 CI tag �
 | 位置 | 地址 | 用途 |
 |------|------|------|
 | **本机（首选）** | `http://127.0.0.1:9092/<file>`（`http_server_node.js` 提供） | 本地自洽，唯一无外部依赖的方式 |
-| **公网 ppp（dmit node 源站，2026-10-16）** | `http://154.31.112.162:9092/test<N>mb.bin` | dmit 上的测速源站。**公网 ppp 正确测法**：经 NAS 代理 `curl -x http://192.168.100.10:7893`（IPv4 组）/ `7894`（IPv6 组）访问；直连作对照。**XTCP 修正后基线**：1MB×3000 c=50 → IPv4 395 Mbps / IPv6 680 Mbps（双 0% 错误）；IPv6 隧道显著快于 IPv4 |
+| **公网 ppp（dmit node 源站，2026-10-16）** | `http://154.31.112.162:9092/test<N>mb.bin` | dmit 上的测速源站。**从 Mac 测会被 Mac↔NAS 的 Wi-Fi 段限流（~54 MB/s ≈ 430 Mbps）**——精确测法：SSH 到 NAS 本机 `curl -x http://127.0.0.1:7894` 多并发聚合（见「远端公网测试源站」节）。**隧道 IPv6 下载方向实测 ~810-850 Mbps**（用户 speedtest 经隧道 849.64 Mbps 吻合）；Upload 40 Mbps 是家宽上行限制，非隧道问题 |
 | dmit 公网 8081 | `http://154.31.112.162:8081/backend/garbage.php?ckSize=N` | 旧 docker `speedtest`（PHP，未换 node）；PHP 动态生成，可当公网大流量的备用入口 |
 | NAS 内网 | `http://192.168.100.10:8081/backend/garbage.php?ckSize=N` | 内网低延迟（docker `librespeed`）；**换台机器可能够不到，别当默认** |
 
@@ -1392,9 +1392,13 @@ curl -x http://192.168.100.10:7893 -o /dev/null -w "7893(对照/IPv4): %{speed_d
 curl -o /dev/null -w "直连对照(不过隧道): %{speed_download}B/s\n" $B
 ```
 
-2026-10-16 实测（**xtcp 参数修正后**）：100MB 单流 — 直连对照 375 Mbps、IPv4 214 Mbps、IPv6 378 Mbps（单流波动大，看聚合）；
-**1MB × 3000 c=50 聚合** — IPv4 50.5 MB/s ≈ **395 Mbps**（3000/3000，0 错误）、IPv6 85 MB/s ≈ **680 Mbps**（3000/3000，0 错误）。
-对照：修正前（native 栈）100MB 单流 IPv4 285 / IPv6 293 Mbps，且 1MB×3000 c=50 有 44% 失败。
+2026-10-16 实测（**xtcp 参数修正后**）：
+- **⚠️ 从 Mac 经 NAS:789x 测会被 Wi-Fi 段限流（54 MB/s ≈ 430 Mbps），不代表隧道能力**。
+- **精确测法（SSH 到 NAS 本机，6 并发 × 100MB 经 7894）**：聚合 101.5 MB/s ≈ **812 Mbps** —
+  与用户 speedtest（Mac 经 mihomo→隧道→dmit 出口，Linode Tokyo 下载）的 **849.64 Mbps** 吻合
+  ⇒ **隧道 IPv6 下载方向真实能力 ≈ 810-850 Mbps**。Upload 40.86 Mbps 是家宽上行限制，非隧道问题。
+- 1MB × 1000 c=50（Mac 侧，受 Wi-Fi 限流）：IPv4/IPv6 双路 1000/1000 全 200，436/431 Mbps，零错误。
+- 对照：native 栈时期 100MB 单流仅 285/293 Mbps 且 1MB×3000 c=50 有 44% 失败（见部署章节参数名坑）。
 
 > 🚨 **Static Echo（FRP）通道大流量 bug（2026-10-16 实测，issue 级别；FRP 测速方案已废弃，结论仍有效）**：
 > 曾试「NAS 源站 + `client.mappings` 9092 暴露」：1MB/10MB 全过（5-9 MB/s）；100MB 卡死（60s 只出 1MB / 空回复）；
