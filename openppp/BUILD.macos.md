@@ -26,9 +26,9 @@
 
 | 库 | 版本 | 产物目录 | 说明 |
 |----|------|----------|------|
-| Boost | 1.86.0 | `third-party/boost/stage/lib/` | 静态库，需从源码编译 |
-| jemalloc | 5.3.0 | `third-party/jemalloc/lib/` | 静态库，需从源码编译 |
-| OpenSSL | 4.0.0 | `third-party/openssl/lib/` | 静态库，需从源码编译 |
+| Boost | 1.92.0 | `third-party/boost/stage/lib/` | 静态库，需从源码编译 |
+| jemalloc | 5.4.0 | `third-party/jemalloc/lib/` | 静态库，需从源码编译 |
+| OpenSSL | 4.0.3 | `third-party/openssl/lib/` | 静态库，需从源码编译 |
 
 ## 4. 编译第三方库
 
@@ -40,17 +40,17 @@
 cd ~/Documents/GitHub/openppp2/third-party
 ```
 
-### 4.1 Boost 1.86.0
+### 4.1 Boost 1.92.0
 
 ```bash
 if [ -f boost/stage/lib/libboost_system.a ] && [ -f boost/stage/lib/libboost_context.a ]; then
   echo "跳过：boost 产物已存在"
 else
   # 下载并解压
-  curl -L -o boost.tar.bz2 "https://archives.boost.io/release/1.86.0/source/boost_1_86_0.tar.bz2"
+  curl -L -o boost.tar.bz2 "https://archives.boost.io/release/1.92.0/source/boost_1_92_0.tar.bz2"
   tar -xjf boost.tar.bz2
   rm -rf boost boost.tar.bz2
-  mv boost_1_86_0 boost
+  mv boost_1_92_0 boost
 
   # 配置工具集（写入 project-config.jam）
   cat > boost/project-config.jam <<'JAM'
@@ -97,14 +97,14 @@ file boost/stage/lib/libboost_context.a
 
 输出应包含 `current ar archive`。
 
-### 4.2 jemalloc 5.3.0
+### 4.2 jemalloc 5.4.0
 
 ```bash
 if [ -f jemalloc/lib/libjemalloc.a ]; then
   echo "跳过：jemalloc 产物已存在"
 else
   # 下载并解压
-  curl -L -o jemalloc.tar.bz2 "https://github.com/jemalloc/jemalloc/releases/download/5.3.0/jemalloc-5.3.0.tar.bz2"
+  curl -L -o jemalloc.tar.bz2 "https://github.com/jemalloc/jemalloc/releases/download/5.4.0/jemalloc-5.4.0.tar.bz2"
   tar -xjf jemalloc.tar.bz2
   rm -rf jemalloc jemalloc.tar.bz2
   mv jemalloc-* jemalloc
@@ -122,14 +122,14 @@ file jemalloc/lib/libjemalloc.a
 
 输出应包含 `current ar archive`。
 
-### 4.3 OpenSSL 4.0.0
+### 4.3 OpenSSL 4.0.3
 
 ```bash
 if [ -f openssl/lib/libssl.a ] && [ -f openssl/lib/libcrypto.a ]; then
   echo "跳过：openssl 产物已存在"
 else
   # 下载并解压
-  curl -L -o openssl.tar.gz "https://github.com/openssl/openssl/releases/download/openssl-4.0.0/openssl-4.0.0.tar.gz"
+  curl -L -o openssl.tar.gz "https://github.com/openssl/openssl/releases/download/openssl-4.0.3/openssl-4.0.3.tar.gz"
   tar -xzf openssl.tar.gz
   rm -rf openssl openssl-src openssl.tar.gz
   mv openssl-* openssl-src
@@ -161,20 +161,28 @@ file openssl/lib/libcrypto.a
 ```bash
 cd ~/Documents/GitHub/openppp2
 
-rm -rf build-macos
 mkdir -p build-macos
 cd build-macos
 
-CC=/usr/bin/cc CXX=/usr/bin/c++ \
-cmake \
-  -DTHIRD_PARTY_LIBRARY_DIR=../third-party \
-  -DPLATFORM_SYSTEM_DARWIN=ON \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-  -G Ninja ..
+# 首次才配置；已存在则复用，避免每次全量重建
+if [ ! -f CMakeCache.txt ]; then
+  CC=/usr/bin/cc CXX=/usr/bin/c++ \
+  cmake \
+    -DTHIRD_PARTY_LIBRARY_DIR=../third-party \
+    -DPLATFORM_SYSTEM_DARWIN=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -G Ninja ..
+fi
 
 ninja ppp
 ```
+
+> `-DTHIRD_PARTY_LIBRARY_DIR` 的相对路径按**当前工作目录**解析，所以必须先 `cd build-macos`。
+> 从仓库根用 `cmake -S . -B build-macos` 时 `../third-party` 会被解析到 `~/Documents/GitHub/third-party`（少一层 `openppp2`），
+> 要从仓库根构建就用绝对路径 `-DTHIRD_PARTY_LIBRARY_DIR=$PWD/third-party`。
+>
+> 只有切换第三方版本时才删掉 `build-macos` 重新配置；日常改动直接 `ninja ppp`，无改动会输出 `ninja: no work to do`。
 
 ## 6. 产物
 
@@ -187,16 +195,18 @@ openppp2/bin/ppp
 验证版本：
 
 ```bash
-openppp2/bin/ppp version
+openppp2/bin/ppp --help | grep -iE 'version|boost|openssl|jemalloc'
 ```
 
 正常输出应包含：
 
 ```
-Version:      2.0.0.0
+Version:      2.2.6.0
 DEPENDENCIES:
-    boost@1.86, openssl@4.0, jemalloc@5.3
+    boost@1.92, openssl@4.0.3, jemalloc@5.4
 ```
+
+> `ppp version` 不是有效的子命令——直接跑会打印 banner 而不是版本号。用 `ppp --help` 读版本。
 
 ## 7. 关键说明
 

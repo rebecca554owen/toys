@@ -9,7 +9,7 @@ description: 在 macOS 上本地编译并打包 openppp2 APK，以及 GitHub Act
 
 ## 1. 环境要求
 
-- Flutter 3.44（stable，brew 管理：`/opt/homebrew/bin/flutter`）
+- Flutter 3.47.7（stable，brew 管理：`/opt/homebrew/bin/flutter`）
 - Android Studio（自带 JDK 21 和 SDK 管理）
 - Android SDK：`platform-tools`、`platforms;android-36`、`build-tools;36.0.0`
 - Android NDK 29.0.14206865（推荐；性能和 CI/release 对齐；Gradle 自动发现，无需 `ndk.dir`）
@@ -31,8 +31,8 @@ Android 依赖不是仓库自带，全部需从源码下载并编译生成。And
 
 | 库 | 版本 | 目录 | 说明 |
 |---|---|---|---|
-| Boost | 1.86.0 | `third-party/boost/arm64-v8a/` | Android arm64 静态库（`.a`），从 archives.boost.io 下载源码编译 |
-| OpenSSL | 4.0.0 | `third-party/openssl-arm64/` | Android 构建专用，`no-shared no-tests no-module`，从 GitHub release 下载源码编译 |
+| Boost | 1.92.0 | `third-party/boost/arm64-v8a/` | Android arm64 静态库（`.a`），从 archives.boost.io 下载源码编译 |
+| OpenSSL | 4.0.3 | `third-party/openssl-arm64/` | Android 构建专用，`no-shared no-tests no-module`，从 GitHub release 下载源码编译 |
 
 Android 构建实际链接的产物：
 
@@ -184,5 +184,5 @@ cd ..
 - **OpenSSL 目录：** Android 使用 `third-party/openssl-<abi>/`，不要覆盖 macOS 的 OpenSSL 目录。
 - **jemalloc：** Android 构建不需要（CMakeLists.txt 只在 Windows 分支检查 jemalloc）。
 - **NDK 版本：** 推荐使用 r29（`29.0.14206865`），和 CI/release 保持一致；r26 可作为本地快速验证备选。
-- **C++ 标准：** Android CMake 使用 C++17，并为 Boost 1.86.0 添加 `_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION`。
-- **Flutter：** brew 管理（`brew install --cask flutter`），当前稳定版 3.44.5。
+- **C++ 标准：** Android CMake 使用 C++17，并为 Boost 1.92.0 添加 `_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION`。
+- **Flutter：** brew 管理（`brew install --cask flutter`），当前稳定版 3.47.7。
