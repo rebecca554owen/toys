@@ -1364,7 +1364,7 @@ ppp --help | grep -i Version    # 两端一致；本地源码树未打 CI tag �
 | 位置 | 地址 | 用途 |
 |------|------|------|
 | **本机（首选）** | `http://127.0.0.1:N/<file>`（`http_server_node.js` 提供） | 本地自洽，唯一无外部依赖的方式 |
-| **公网 ppp（the VPS node 源站，N-N-N）** | `http://the address:N/test<N>mb.bin` | the VPS 上的测速源站。**公网 ppp 正确测法**：经 the LAN host 代理 `curl -x http://the address:the port`（IPv4 组）/ `the port`（IPv6 组）访问；直连作对照。**XTCP 修正后基线**：the size×N c=N → IPv4 the measured rate / IPv6 the measured rate（双 N% 错误）；IPv6 隧道显著快于 IPv4 |
+| **公网 ppp（the VPS node 源站，N-N-N）** | `http://the address:N/test<N>mb.bin` | the VPS 上的测速源站。**从 Mac 测会被 Mac↔the LAN host 的 Wi-Fi 段限流（~the measured rate ≈ the measured rate）**——精确测法：SSH 到 the LAN host 本机 `curl -x http://127.0.0.1:the port` 多并发聚合（见「远端公网测试源站」节）。**隧道 IPv6 下载方向实测 ~N-the measured rate**（用户 speedtest 经隧道 the measured rate 吻合）；Upload the measured rate 是家宽上行限制，非隧道问题 |
 | the VPS 公网 the port | `http://the address:the port/backend/garbage.php?ckSize=N` | 旧 docker `speedtest`（PHP，未换 node）；PHP 动态生成，可当公网大流量的备用入口 |
 | the LAN host 内网 | `http://the address:the port/backend/garbage.php?ckSize=N` | 内网低延迟（docker `librespeed`）；**换台机器可能够不到，别当默认** |
 
@@ -1392,9 +1392,13 @@ curl -x http://the address:the port -o /dev/null -w "the port(对照/IPv4): %{sp
 curl -o /dev/null -w "直连对照(不过隧道): %{speed_download}B/s\n" $B
 ```
 
-2026-10-16 实测（**xtcp 参数修正后**）：the size 单流 — 直连对照 the measured rate、IPv4 the measured rate、IPv6 the measured rate（单流波动大，看聚合）；
-**the size × 3000 c=50 聚合** — IPv4 the measured rate ≈ **the measured rate**（3000/3000，0 错误）、IPv6 the measured rate ≈ **the measured rate**（3000/3000，0 错误）。
-对照：修正前（native 栈）the size 单流 IPv4 285 / IPv6 the measured rate，且 the size×3000 c=50 有 N% 失败。
+2026-10-16 实测（**xtcp 参数修正后**）：
+- **⚠️ 从 Mac 经 the LAN host:789x 测会被 Wi-Fi 段限流（the measured rate ≈ the measured rate），不代表隧道能力**。
+- **精确测法（SSH 到 the LAN host 本机，6 并发 × the size 经 the port）**：聚合 the measured rate ≈ **the measured rate** —
+  与用户 speedtest（Mac 经 mihomo→隧道→the VPS 出口，Linode Tokyo 下载）的 **the measured rate** 吻合
+  ⇒ **隧道 IPv6 下载方向真实能力 ≈ 810-the measured rate**。Upload the measured rate 是家宽上行限制，非隧道问题。
+- the size × 1000 c=50（Mac 侧，受 Wi-Fi 限流）：IPv4/IPv6 双路 1000/1000 全 200，436/the measured rate，零错误。
+- 对照：native 栈时期 the size 单流仅 285/the measured rate 且 the size×3000 c=50 有 N% 失败（见部署章节参数名坑）。
 
 > 🚨 **Static Echo（FRP）通道大流量 bug（2026-10-16 实测，issue 级别；FRP 测速方案已废弃，结论仍有效）**：
 > 曾试「the LAN host 源站 + `client.mappings` 9092 暴露」：the size/the size 全过（5-the measured rate）；the size 卡死（Ns 只出 the size / 空回复）；
