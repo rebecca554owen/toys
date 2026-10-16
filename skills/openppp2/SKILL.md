@@ -1399,14 +1399,13 @@ done; wait   # 各行 speed_download 相加 ×8 = 聚合 Mbps（the port 同理�
 > 💡 终端侧 speedtest（经 mihomo→隧道→the VPS 出口）的 Upload 偏低是**家宽上行限制**，与隧道无关；
 > 下载方向才能反映隧道能力。测试时注意用户 mihomo 流量与压测共用隧道，会互相挤占。
 
-> 🚨 **公网大文件长传输会被掐（2026-10-16 实测，issue 级别）**：the LAN host 本机经 the port 单条拉
-> the VPS:9092 大文件，the size（~Ns）能完整过；**the size 在 the size/the size 处被断（curl exit=18 partial file）**；
-> 6 并发 × the size 每条 Ns 即断。速率本身能到 576-the measured rate（断前）。the LAN host journal 见 mux 子链路
-> `record header read FAILED err=101`（ECANCELED）+ `socket closed role=child`。
-> **两端 ppp 资源全程平稳**（the VPS server RSS 11-the size / the LAN host client ~the size）——不是资源瓶颈，
-> 疑似**饱和流量把 mux 控制帧/keepalive 饿死 → 链路超时重连 → 在途 flow 被杀**（本地回环
-> 带宽富余从不复现）。深挖方向：mux 链路 keepalive 与数据帧的队列公平性。
-> **规避**：公网吞吐测试用 ≤the size 文件多并发聚合（能完整跑完），别用单条 GB 级长传输。
+> 🚨 **公网大文件长传输被掐 = 隧道劣化，重启即恢复（2026-10-16 定案）**：单条 the size 经 the port
+> 曾在 288/389/the size 处被断（curl exit=18，the LAN host 侧 mux 子链路 `err=101 ECANCELED`）。
+> **已验证不是**：源站问题（the VPS 本机直拉源站 the size 完整）、OOM（the VPS 无 oom-killer 记录、
+> ppp 无重启）、node（存活）、带宽（断前 the measured rate）。
+> **`systemctl restart ppp2` 重建 mux 链路后立即完整通过 the size（the measured rate）**——即 skill 已知的
+> 「隧道数 TB 流量后退化，重启可恢复」现象。真公网大文件（Linode Tokyo the size，the measured rate）同向完整过。
+> **规避**：大文件断流先重启对应 the LAN host client 重建链路再测；公网吞吐优先 ≤the size 多并发聚合。
 
 > 🚨 **Static Echo（FRP）通道大流量 bug（2026-10-16 实测，issue 级别；FRP 测速方案已废弃，结论仍有效）**：
 > 曾试「the LAN host 源站 + `client.mappings` 9092 暴露」：the size/the size 全过（5-the measured rate）；the size 卡死（Ns 只出 the size / 空回复）；
