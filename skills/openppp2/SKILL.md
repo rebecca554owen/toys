@@ -2560,7 +2560,7 @@ lab 不需要 xtcp，关掉即可。）
   （新增错误码 `VmuxSocketSendAfterFin`）。
 - 效果：现网 8 小时 34 次判死里 seq>1 **一次没有**（剩余 100% 归为缺陷 5）。
 
-**5. 拒绝通告被发送端丢弃（v2.2.17 修复其浪费，根因未除）**
+**5. 拒绝通告被发送端丢弃（v2.2.17 修复其浪费，根因见缺陷 6）**
 
 - v2.2.16 加了显式拒绝：接收侧对未知 cid 不再静默丢弃，而是复用 `cmd_syn_ok`
   错误通道回 `'N'`（no such flow）。
@@ -2574,12 +2574,38 @@ lab 不需要 xtcp，关掉即可。）
 - 效果：上线 9 小时收到 179 次拒绝，`rtx.exhausted` 与 `flow.reset` **均为 0**
   （v2.2.16 同期为 26 次烧满）。
 
-**遗留（未解决）**：对端为什么「没有这条流的上下文」。
-- `mux.rx.closed_flow.drop` 恒为 0 ⇒ 对端不是「记着已关闭的流」，而是没有该 cid 的上下文。
-- 两条候选：(a) `cmd_syn` 丢失（连接控制帧**不受 rtx 保护**、无 DSN）；
-  (b) 对端建立过但被 `release_connection()` 抹掉 —— 该函数**不**调 `remember_closed_flow()`。
-- 判别办法：在 `release_connection()` 补 `remember_closed_flow()`，看 `closed_flow.drop`
-  是否由 0 变非 0；若仍为 0 则偏向 (a)，需给 `cmd_syn` 加可靠性（新协议语义 ⇒ 要能力协商）。
+**6. 接收上下文消失时不留「已关闭流」记录（已修，未发版）**
+
+- 对端会一直重传某条流的帧，直到听见 ACK。接收侧只有 **FIN 收敛路径**
+  （`maybe_release_flow`）会写 `closed_flows_` 记录。
+- **本地 socket 先关**（本地错误 / 写失败 / 老化超时）或**流被 reset**
+  （gap timeout / 重排缓冲溢出）这两条路径都直接 `flows_.erase()`，**不留任何记录**
+  ⇒ 迟到的帧查不到 `closed_flows_`、也查不到 socket ⇒ 走 **unknown_cid** 分支
+  ⇒ 被当「我没有的流」拒绝 ⇒ **对端放弃一条数据其实已经到达的流**。
+- 恒等式（判读现网计数器时直接用）：
+  `mux.rx.flow.refused == mux.rx.flow.unknown_cid + mux.rx.closed_flow.drop`
+  （`refuse_flow()` 恰好两个调用点：closed_flow 路径与 unknown_cid 路径）。
+  现网 `refused == unknown_cid` 且 `drop == 0` ⇒ 100% 拒绝来自 unknown_cid 分支。
+- 修法：新增 `remember_closed_flow_from_context()` —— 在**上下文还在的时候**把交付前沿
+  （`flow_rx_next_ - 1`）写进 `closed_flows_`；`release_connection()` 与 `fail_flow()`
+  两条路径都在 `flows_.erase()` **之前**调用它。
+  - 纯接收端簿记：**不改线格式、不需要能力协商、混版完全兼容**。
+  - 写入时机天然不重复：FIN 路径写完就 erase 上下文 ⇒ 第二个写入者查不到上下文 ⇒ 空操作。
+  - cid 复用安全：建新流时 `closed_flows_.erase(cid)`（接收侧与发起侧各一处）。
+- **预期计数器变化**（升级后基线会变，别当故障）：
+  - `mux.rx.closed_flow.drop` **不再恒为 0** —— 带洞的流，其洞帧（`seq == flow_rx_next_`）
+    会命中 drop+refuse 分支。这是**语义正确的重新归类**。
+  - `mux.rx.flow.unknown_cid` 相应下降。
+
+**已排除的假设**：`cmd_syn` 丢失（连接控制帧不受 rtx 保护、无 DSN）—— **代码级排除**。
+- `status_.connected_` 只在 `connect_ok(true)` 里置位；
+- `connect_ok` 只由收到 `cmd_syn_ok` 且 `err == 'A'` 时调用；
+- `'A'` 只在接收端 `process_rx_connecting()` **建好 socket 之后**才发。
+⇒ **对端发过数据帧 ⇒ 对端一定建过这条流** ⇒ 不可能是「cmd_syn 丢了所以没建流」。
+
+**仍遗留（未解决）**：对端**为什么**在建立流之后、交付首帧之前就关掉这条流
+（本地 RST / 写错误 / 老化超时三条路径之一）。需要现网日志佐证才能区分，
+计数器分不出来 —— `rtx exhausted` 明细里 `seq=1` 只能说明「首帧就死了」。
 
 ### 二、gap timeout 的判决：失配在现网不可达，修复已撤销
 
@@ -2697,3 +2723,27 @@ gh release delete <tag> --repo <repo> --yes
 - `pkill -f pattern` 会匹配自身 ⇒ 用 `pattern[.]ext`。
 - macOS `date -I` 不存在 ⇒ 用 `date "+%Y-%m-%dT%H:%M:%S"`。
 - 同步 macOS → Linux 的源码树要清 `._*` 资源叉文件，且**挪走 build 目录重新 configure**。
+
+### 七、写 mux 单测时会踩的坑
+
+- **Boost.Asio 的 `stopped()` 语义**：`io_context` 一旦**没有 outstanding work**，
+  `stopped()` 就变成真（`scheduler::work_cleanup` 把 work 计数减到 0 时置位）。
+  `vmux_post_exec()` 明确**拒绝往已停止的 context 投递**
+  ⇒ `vmux_skt::close()` 投递的 `finalize()` 会被**静默丢弃**。
+- 后果：单测 harness 若像 `RunOnStrand` 那样**一次只跑一个 handler**，
+  两次 strand 调用之间 work 归零 ⇒ `stopped() == true` ⇒ close 无效、
+  socket 还在、`release_connection()` 没跑。症状是「断言 socket 必须消失」失败，
+  但**根因不在被测逻辑**。
+- 正确写法：**在 strand 内部发起 close**（那时 context 还活着），
+  再在同一条 strand 上跟一个 marker handler 把排队下来的 `finalize()` 排干。
+- `RunOnStrand` 的 `post` 在 `restart()` **之前**：`post` 会把 handler 排队，
+  `restart()` 清掉 stopped 标志，随后 `run_one()` 才跑得动 —— 这个顺序别改。
+
+### 八、已知仓库缺陷（待修，别当成已闭环）
+
+- `docs/vmux/VMUX_AUDIT_REPORT.md` 的 **P2-9 闭环声明与代码矛盾**：
+  `release_flow_reliability_state()` 在 `release_connection()` 里的调用
+  曾被 `57f0ffa5` 删除且未恢复，文档却写成「已闭环」。
+- `tests/cpp/vmux_wave0_rtx_release_test.cpp` 对该修复**空转**：
+  文件头注释提到 `release_connection`，测试体只测 `MuxRetransmitBuffer::EraseCid`，
+  根本不碰 `vmux_net` ⇒ 守卫早已失效也照样绿。
