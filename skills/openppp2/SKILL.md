@@ -2625,6 +2625,28 @@ lab 不需要 xtcp，关掉即可。）
 - 判据（单测）：`TestFinAfterSocketCloseUsesTheFlowsDsn` —— 数据帧 DSN=1，
   关闭后补发的 FIN 必须是 **2**。契约测试第 8 条钉住这个顺序。
 
+**8. 分类修复的现网验证（2026-11-03 晚高峰，v2.2.18）—— 语义与计数器都按预期变了**
+
+- 升级后第一个晚高峰窗口，四端 **`rtx.exhausted` / `flow.reset` / `gap_timeout` 全为 0**，
+  且 **`carrier exit` / `session disposed` / `session established` 也全为 0**
+  ⇒ 没有载体批量死亡、没有整会话重建、没有发送端放弃流。
+  （对照历史：10-31 晚高峰 3h 是 carrier_exit 217 / session_new 20 / rtx_exhausted 376；
+  11-02 晚高峰 18:00–19:00 是 carrier exit 52、session disposed 9 **每小时**。）
+- **计数器恒等式 `refused == unknown_cid + closed_flow.drop` 在四端全部成立**
+  ⇒ 可以直接拿它判读现网，不用再猜拒绝来自哪条分支。
+- `closed_flow.drop` 从「整个 v2.2.17 生命周期恒为 0」变成**真实非零** ⇒ 修复确实生效；
+  同时 `unknown_cid` 大幅下降（客户端侧降到 0～1）。
+- **服务端仍会留少量 `unknown_cid`**（the VPS 侧 25）：那是对端开了流、但首帧到达时本端
+  还没有上下文 —— 属于「真的没见过这条流」，与分类修复无关，要靠 FIN 修复（缺陷 7）
+  让对端**知道流已结束、停止发数据**才能逐步消掉。
+- **`closed_flow.reack` 会显著上升**（一次重压测试里 25→191）⇒ 这是**修复生效的信号**：
+  这些帧旧代码会当未知流拒绝（让对端放弃一条数据其实已到达的流），现在被正确重新确认。
+- ⚠️ **升级自身会造出「假的载体死亡」**：先升 the LAN host 再升 the VPS 时，the VPS 的重启会把 the LAN host 的载体
+  RST 掉（the LAN host 侧看到 7 次 carrier exit + 1 次 session disposed），the LAN host N 秒后自愈重建。
+  ⇒ 判读晚高峰必须**从升级扰动结束后切片**（例如 17:13 之后），否则把升级抖动算成高峰事件。
+- ⚠️ **晚高峰的公网直连路径本身会塌**（同轮实测直连 N～the measured rate，3 笔里 2 笔 Ns 超时），
+  而隧道同轮 N～the measured rate ⇒ **测速必须同轮配对代理臂与直连臂**，否则会把路径塌陷读成隧道问题。
+
 ### 二、gap timeout 的判决：失配在现网不可达，修复已撤销
 
 - 失配条件：`pto×47 > Ns` ⇒ 需要 **RTT ≥ the measured delay**。
@@ -2741,6 +2763,15 @@ gh release delete <tag> --repo <repo> --yes
 - `pkill -f pattern` 会匹配自身 ⇒ 用 `pattern[.]ext`。
 - macOS `date -I` 不存在 ⇒ 用 `date "+%Y-%m-%dT%H:%M:%S"`。
 - 同步 macOS → Linux 的源码树要清 `._*` 资源叉文件，且**挪走 build 目录重新 configure**。
+- ⚠️ **`gh` 在本仓库默认解析到 upstream（liulilittle/openppp2），不是 fork（rebecca554owen/openppp2）**
+  —— 本地有 `origin`（fork）与 `upstream` 两个远端，`gh` 跟着 upstream 走。
+  ⇒ **所有 `gh` 命令必须显式带 `-R rebecca554owen/openppp2`**：
+  - 不带 → `gh workflow run` 报 `403 Must have admin rights`（你在 upstream 只有 READ）；
+  - 不带 → `gh run list --commit <sha>` **静默返回空**（tag 触发的运行不在 upstream），
+    看护脚本会一直空转，且看不出是「查错了仓库」还是「构建还没跑」；
+  - 判别：`gh repo view --json nameWithOwner` 看当前解析到谁。
+  ⇒ 查 tag 触发的构建用 API 并按 `head_branch` 过滤：
+    `gh api "repos/rebecca554owen/openppp2/actions/runs?per_page=30" --jq '.workflow_runs[] | select(.head_branch=="v2.2.18") | "\(.status) \(.conclusion) \(.name)"'`
 
 ### 七、写 mux 单测时会踩的坑
 
