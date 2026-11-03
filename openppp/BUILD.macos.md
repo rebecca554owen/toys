@@ -28,7 +28,7 @@
 |----|------|----------|------|
 | Boost | 1.92.0 | `third-party/boost/stage/lib/` | 静态库，需从源码编译 |
 | jemalloc | 5.4.0 | `third-party/jemalloc/lib/` | 静态库，需从源码编译 |
-| OpenSSL | 4.0.3 | `third-party/openssl/lib/` | 静态库，需从源码编译 |
+| OpenSSL | 4.1.0 | `third-party/openssl/lib/` | 静态库，需从源码编译 |
 
 ## 4. 编译第三方库
 
@@ -122,14 +122,15 @@ file jemalloc/lib/libjemalloc.a
 
 输出应包含 `current ar archive`。
 
-### 4.3 OpenSSL 4.0.3
+### 4.3 OpenSSL 4.1.0
 
 ```bash
-if [ -f openssl/lib/libssl.a ] && [ -f openssl/lib/libcrypto.a ]; then
-  echo "跳过：openssl 产物已存在"
+if [ -f openssl/lib/libssl.a ] && [ -f openssl/lib/libcrypto.a ] \
+   && grep -q 'OPENSSL_VERSION_STR "4.1.0"' openssl/include/openssl/opensslv.h 2>/dev/null; then
+  echo "跳过：openssl 4.1.0 产物已存在"
 else
-  # 下载并解压
-  curl -L -o openssl.tar.gz "https://github.com/openssl/openssl/releases/download/openssl-4.0.3/openssl-4.0.3.tar.gz"
+  # 下载并解压（版本变了就必须重来：只判文件存在会把旧版本留在原地）
+  curl -L -o openssl.tar.gz "https://github.com/openssl/openssl/releases/download/openssl-4.1.0/openssl-4.1.0.tar.gz"
   tar -xzf openssl.tar.gz
   rm -rf openssl openssl-src openssl.tar.gz
   mv openssl-* openssl-src
@@ -203,7 +204,7 @@ openppp2/bin/ppp --help | grep -iE 'version|boost|openssl|jemalloc'
 ```
 Version:      2.2.6.0
 DEPENDENCIES:
-    boost@1.92, openssl@4.0.3, jemalloc@5.4
+    boost@1.92, openssl@4.1, jemalloc@5.4
 ```
 
 > `ppp version` 不是有效的子命令——直接跑会打印 banner 而不是版本号。用 `ppp --help` 读版本。
