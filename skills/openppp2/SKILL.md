@@ -2607,6 +2607,24 @@ lab 不需要 xtcp，关掉即可。）
 （本地 RST / 写错误 / 老化超时三条路径之一）。需要现网日志佐证才能区分，
 计数器分不出来 —— `rtx exhausted` 明细里 `seq=1` 只能说明「首帧就死了」。
 
+**7. 关闭时补发的 FIN 从 DSN=1 重新开始（已修，未发版）**
+
+- `finalize()` 原本是：先 `release_connection()`（它 erase `tx_flow_seq_`），
+  再 `post(cmd_fin)` ⇒ 那条「补发的 FIN」拿到 **per-flow DSN = 1**。
+- 接收侧只在**交付前沿**上投递 per-flow 帧；**低于前沿的帧一律当重复帧**：
+  回一个 ACK 但**不投递**（`vmux_net.cpp` 的 stale/duplicate 分支）。
+  ⇒ 对端把这条 FIN 当重复帧 ack 掉，**永远学不到这条流已经结束**，
+  于是留着流的上下文，直到别的机制把连接拆掉。
+- 只在「本地 socket 关闭且之前没发过 FIN」时发生
+  （本地错误 / 写失败 / 老化超时 / 显式 close）。
+  正常路径（本地读侧 EOF 先发 FIN）不受影响。
+- 修法：`finalize()` 里把 `post(cmd_fin)` 挪到 `release_connection()` **之前**。
+  `release_connection()` 随后照样 erase `tx_flow_seq_`，不会留残留。
+  - 安全性：`post()` 失败会走 `close_exec()` → 会话整体 teardown（`skts_.clear()`），
+    所以调换顺序不会漏掉清理。
+- 判据（单测）：`TestFinAfterSocketCloseUsesTheFlowsDsn` —— 数据帧 DSN=1，
+  关闭后补发的 FIN 必须是 **2**。契约测试第 8 条钉住这个顺序。
+
 ### 二、gap timeout 的判决：失配在现网不可达，修复已撤销
 
 - 失配条件：`pto×47 > Ns` ⇒ 需要 **RTT ≥ the measured delay**。
@@ -2739,11 +2757,14 @@ gh release delete <tag> --repo <repo> --yes
 - `RunOnStrand` 的 `post` 在 `restart()` **之前**：`post` 会把 handler 排队，
   `restart()` 清掉 stopped 标志，随后 `run_one()` 才跑得动 —— 这个顺序别改。
 
-### 八、已知仓库缺陷（待修，别当成已闭环）
+### 八、已修正的文档/测试缺陷（2026-11-03）
 
-- `docs/vmux/VMUX_AUDIT_REPORT.md` 的 **P2-9 闭环声明与代码矛盾**：
-  `release_flow_reliability_state()` 在 `release_connection()` 里的调用
-  曾被 `57f0ffa5` 删除且未恢复，文档却写成「已闭环」。
-- `tests/cpp/vmux_wave0_rtx_release_test.cpp` 对该修复**空转**：
-  文件头注释提到 `release_connection`，测试体只测 `MuxRetransmitBuffer::EraseCid`，
-  根本不碰 `vmux_net` ⇒ 守卫早已失效也照样绿。
+- ~~`docs/vmux/VMUX_AUDIT_REPORT.md` 的 P2-9 闭环声明与代码矛盾~~ ⇒ **已改**：
+  报告现在写明**未闭环**，并说明为什么不按原样恢复
+  （当前实现故意保留已发送未确认的帧；硬丢会在对端序号空间留洞，
+  只能等 gap timeout 重建会话；v2.2.17 的显式拒绝已把对端无上下文时的
+  保留时间从无界压到一次 RTT）。
+- ~~`tests/cpp/vmux_wave0_rtx_release_test.cpp` 空转~~ ⇒ **已改**：
+  文件头不再声称覆盖 `release_connection()`，只声明它真正测的原语。
+- 新增 `TestSocketCloseKeepsRetainedFrames`：钉住「本地关闭不得丢已发送帧」
+  这条设计决定，防止后来者按 P2-9 的字面意思把释放加回去。
