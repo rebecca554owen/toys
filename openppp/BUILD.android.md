@@ -32,7 +32,7 @@ Android 依赖不是仓库自带，全部需从源码下载并编译生成。And
 | 库 | 版本 | 目录 | 说明 |
 |---|---|---|---|
 | Boost | 1.92.0 | `third-party/boost/arm64-v8a/` | Android arm64 静态库（`.a`），从 archives.boost.io 下载源码编译 |
-| OpenSSL | 4.0.3 | `third-party/openssl-arm64/` | Android 构建专用，`no-shared no-tests no-module`，从 GitHub release 下载源码编译 |
+| OpenSSL | 4.1.0 | `third-party/openssl-arm64/` | Android 构建专用，`no-shared no-tests no-module`，从 GitHub release 下载源码编译 |
 
 Android 构建实际链接的产物：
 
