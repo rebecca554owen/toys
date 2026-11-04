@@ -2799,3 +2799,58 @@ gh release delete <tag> --repo <repo> --yes
   文件头不再声称覆盖 `release_connection()`，只声明它真正测的原语。
 - 新增 `TestSocketCloseKeepsRetainedFrames`：钉住「本地关闭不得丢已发送帧」
   这条设计决定，防止后来者按 P2-9 的字面意思把释放加回去。
+
+### 九、commit 历史重写（把同类提交合并成 10 个，2026-11-04）
+
+**目标**：openppp2 的 `dev` 原本是 upstream/main + 34 个线性提交（含 6 个纯版本号 bump）。
+按主题合并成 10 个提交后 force-push 到 fork 的 `dev`。
+**验收标准**：`git diff upstream/main..dev` 与重写前**逐字节相同**
+（260 files, +34521 / −29813）—— 只重组历史，不改任何文件内容。
+
+#### 末组钉版算法（保证最终树一致的关键）
+
+重排会打乱**同一个文件**上多个提交的原顺序 ⇒ 冲突不可避免，且无法靠"选一边"解决
+（`MuxRetransmitBuffer.h` 被 `57f0ffa5 → 4e55fc13 → 3f5489bb → ca12db29` 依次改写，
+而分组把这四个分到了三个组，顺序无法保持）。
+
+⇒ 做法：先算出**每个文件被哪些组碰过**，取**最后一组**为该文件的「末组」；
+每组提交前，把**本组是末组的文件**直接 `git checkout <最终提交> -- <file>` 钉成最终 blob。
+最后这个组的内容就是最终树 ⇒ 逐字节一致由构造保证，不靠运气。
+
+#### 冲突判读规则
+
+- 同一文件上**后写的提交取代先写的**：若 A 写于 B 之前，而 B 的 API 已把 A 的做法删掉，
+  重排后应保留 **B 的版本**（例：`ca12db29` 把 `Ack()` 的 fast-retransmit 参数整个删了，
+  `3f5489bb` 的 `cumulative_below_largest` 参数属于被取代的旧 API ⇒ 冲突取新 API）。
+- **冲突块里如果混着两个组各自的改动，两边都留**（例：`RuntimeStatsJson.h`
+  一边删 XTCP/TAP 字段、一边加 mux 计数器 ⇒ 删的照删，加的照加）。
+- 冲突块若只是**上下文窗口不同**（不是真正的语义分歧），取 **ours**（自己那侧），
+  并核对对方真正的改动有没有被自动并进来。
+
+#### 踩过的坑
+
+- `git checkout --ours/--theirs <file>` **只改工作区**，index 里仍是冲突态
+  ⇒ 之后必须 `git add`（或 `git add -A`），否则 `git diff --diff-filter=U` 仍有条目。
+- `git cherry-pick --quit` 清掉 sequencer 状态但**保留已暂存内容**；
+  `git cherry-pick --continue` 会**把当前这个提交单独提交掉** —— 想合并就别用 `--continue`。
+- 冲突解决后要 `git cherry-pick --quit` 再 cherry-pick 下一个，否则报 already in progress。
+- **bash 的 `GROUPS` 是内建只读变量**（当前用户的组 ID）⇒ 拿它当数组名会把数组覆盖成
+  `20 20 / 12 12 / 61 61 …` 这种数字对。数组名要避开内建变量。
+- `.gitattributes` 里出现冲突标记时，git 会报
+  `(fix(http): is not a valid attribute name: .gitattributes:9)` —— 那是属性解析器的抱怨，
+  不是新的冲突；把文件按文本改好即可。
+- 版本号 bump 提交（12 个文件、+16/−16）无法 cherry-pick 到上游的旧版本号上
+  ⇒ 最后一个组直接 `git checkout <最终提交> -- <12 个文件>` 钉版。
+- 写 shell 辅助脚本时，JS 模板字符串里的 `${...}` 会被解析 ⇒ **先落文件再执行**。
+
+#### 结果与留痕
+
+- `dev`：34 → **10** 个提交；最终树与 `v2.2.18`（`80f18269`）**逐字节相同**。
+- 旧历史留在本地分支 `archive/pre-rewrite`（指 `80f18269`），**6 个 tag 一个都没动**
+  （tag 仍指向旧提交；旧提交与新提交的树相同 ⇒ tag 的内容语义不变）。
+- 验收：`git diff --stat 80f18269 dev` 为空；`git diff --shortstat upstream/main..dev`
+  与重写前完全一致；`ctest` **122/122 通过**；
+  `bash tools/check_include_boundaries.sh` 与 `python3 tools/check_vcxproj_sources.py` 均 PASS；
+  `go test ./...`（go/guardian）通过。
+- 推送：`git push --force-with-lease=refs/heads/dev:<旧 sha> origin dev`
+  （`origin` = rebecca554owen/openppp2，`upstream` = liulilittle/openppp2，**别推错**）。
