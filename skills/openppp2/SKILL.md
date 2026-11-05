@@ -2854,3 +2854,116 @@ gh release delete <tag> --repo <repo> --yes
   `go test ./...`（go/guardian）通过。
 - 推送：`git push --force-with-lease=refs/heads/dev:<旧 sha> origin dev`
   （`origin` = rebecca554owen/openppp2，`upstream` = liulilittle/openppp2，**别推错**）。
+
+### 十、审计报告遗留项修复：P0-1 / P1-3 / P1-6（2026-11-04）
+
+**背景**：`docs/vmux/VMUX_AUDIT_REPORT.md` 是**上游** 2026-08-02 的历史审计（`97805d16` 引入）。
+fork 在 `57f0ffa5`（`vmux_net.cpp` 整文件重写）里偏离了它，已复核的三条已修复，
+P1-1 / P2-11（per-link RTT）经确认是**有意**的路线选择（走 PTO 单独判丢失），未恢复。
+
+#### 三条修复各是什么
+
+- **P0-1**（`connect_yield` 捕获裸 `this`）：形态回退。`57f0ffa5` 把捕获列表改成
+  `[self, this, ...]` 并改回裸 `connect(...)`。**实质仍安全**（`self` 已捕获），
+  但报告清单「lambda 中不再捕获裸 `this`」不再成立。已恢复上游形态：`self->connect(...)`
+  + 补回上游那段解释注释。
+- **P1-3**（per-flow TX 配额）：`PPP_MUX_TX_FLOW_MAX_FRAMES=256` /
+  `PPP_MUX_TX_FLOW_MAX_BYTES=1MiB`，`enqueue_flow_tx()` 入队前判超限，
+  **只 `fail_flow()` 这一条流**，会话与其余流照常。
+- **P1-6**（控制队列硬上限）：`PPP_MUX_TX_CTRL_MAX_FRAMES=256`，队列满时丢**最旧可丢弃帧**，
+  全是关键帧时才拒新帧。
+
+#### 两个上游没有、必须自己定的语义
+
+**判断一：拒绝回执（`cmd_syn_ok` 带非 `'A'` 状态字节）算「可丢弃帧」。**
+
+上游的可丢弃集合只有 ACK / keepalive。但 fork 有独有的 `refuse_flow()`：
+对端每来一个「它有、我没有」的流，就回一条 `cmd_syn_ok`。若这些回执不可丢，
+洪泛就能把控制队列占满，让后面真正的 ACK / SYN 全被拒 ⇒ **洪泛可以夺走整条会话的确认能力**。
+拒绝本身是尽力而为的通知：丢掉它，对端只是按原预算继续重传（正是引入 `refuse_flow()`
+之前的行为），**不丢数据、不留序号洞**。所以：**拒绝回执可丢，接受回执（`'A'`）是关键帧**。
+判定看 payload 第 0 字节：`is_expendable_ctrl_frame()`。
+
+**判断二：被拒的新帧不得升级成「拆掉整个会话」。**
+
+上游 `post()` 在 `post_internal()` 失败时一律 `close_exec()`。加上硬上限后，
+这条路径本身变成新的 DoS：队列满 → 新帧被拒 → `post()` 失败 → **整个会话被拆**，
+对端几百个包就能做到。
+⇒ 给 `post_internal()` 加一个「可恢复失败」出参 `bool* recoverable`：
+控制队列触顶属于**背压**，`post()` 收到这种失败**不**拆会话，只拒该帧并结清它的 completion；
+其余失败（未建立 / 已释放 / 越界 / 分配失败）仍然致命，行为不变。
+
+#### 被丢弃的帧必须唤醒 waiter
+
+上游那处漏了 `finish_tx_completion`。丢帧若不结清 completion，writer 会一直挂到会话结束。
+fork 自己实现时补上了：**丢帧 / 拒帧都要立即以 `false` 结清 completion**。
+
+#### 现有测试体系的一个坑
+
+`tests/cpp` 树**不编译 `vmux_net.cpp`** ⇒ 凡是碰 `vmux_net` 行为的新用例，
+`tests/cpp` 里的 `ctest` **跑不到**。`vmux_receive_semantics_test` 由主工程
+`ENABLE_VMUX_RECEIVE_SEMANTICS_TEST` 目标构建，命令：
+
+```bash
+cmake --build build/vmux-regression --target vmux_receive_semantics_test
+./bin/vmux_receive_semantics_test
+```
+
+（`build/vmux-regression` 是本地已有的 Ninja 目录，开了该开关、third-party 树齐全。）
+`tests/cpp` 树里适合放的是**源码契约断言**（像 `mux_flow_refusal_contract_test` 那样读源文件断言）。
+本次新增 `tests/cpp/mux_connect_yield_lifetime_contract_test.cpp`：P0-1 这种 UAF **行为级很难稳定复现**，
+但**形态**可以钉死 —— 断言捕获列表里没有裸 `this`、成员函数经 `self->` 调用、解释注释还在。
+
+#### 负向验证是必须的（本次做了 5 次）
+
+改了行为就得证明新用例真能抓到回归，否则用例只是装饰：
+
+| 临时改坏的地方 | 用例报的错 |
+|---|---|
+| `post()` 恢复成「失败即 `close_exec()`」 | `a refused control frame must not tear the session down` |
+| 拒绝回执改回不可丢弃 | `a refusal must make room under the cap` |
+| 捕获列表改回 `[self, this, ...]` + 裸 `connect(...)` | `the posted lambda must not capture a bare this (P0-1)` |
+| 去掉 per-flow 配额判据 | `the per-flow TX queue must stop at its hard cap` |
+| 去掉 `fail_flow()` | `the flow that hit its quota must be closed` |
+
+#### 改动落在哪些文件
+
+`ppp/app/mux/vmux_net.cpp`（`ctrl_queue_makes_room()` / `is_expendable_ctrl_frame()` /
+`enqueue_flow_tx()` / `post_internal()` / `connect_yield()`）、`ppp/app/mux/vmux_net.h`、
+`ppp/app/mux/MuxRuntimeCounters.h`、`ppp/app/runtime/RuntimeStatsJson.h`、
+`ppp/diagnostics/ErrorCodes.def`、`ppp/stdafx.h`、
+`tests/cpp/vmux_receive_semantics_test.cpp`、`tests/cpp/mux_runtime_counters_test.cpp`、
+`tests/cpp/mux_connect_yield_lifetime_contract_test.cpp`（新）、`tests/cpp/CMakeLists.txt`、
+`docs/vmux/VMUX_AUDIT_REPORT.md`。
+
+新增计数器：`mux.tx.flow.overflow`、`mux.tx.ctrl.cap`、`mux.tx.ctrl.cap.reject`
+（都进了 `--stats-json` 的 `mux_counters`）。新增错误码：
+`VmuxNetTxControlQueueFull`、`VmuxNetTxFlowQueueFull`。
+
+#### 两个既有测试会因本次改动而失败（记得同步）
+
+- `tests/cpp/mux_flow_refusal_contract_test.cpp` 是**源码字面量**断言：
+  它要求 `vmux_net.cpp` 里出现 `cmd_syn_ok, &err, 1, connection_id)` 这个**原样字符串**。
+  `refuse_flow()` 若是改成直调 `post_internal(...)`（多带参数），字面量就匹配不上。
+  ⇒ 结论：**`refuse_flow()` 继续走 `post()`**，靠 `post()` 里的 recoverable 通道解决背压，
+  不要改它的调用形态。
+- `tests/cpp/mux_runtime_counters_test.cpp` 里 `ExpectedCounterKeys()` 是**枚举全量**并断言
+  `getMemberNames().size()` 相等 ⇒ 每加一个计数器都必须同步补 key。
+
+#### PTC / JS 侧的坑（本次踩了 3 次）
+
+在 `run_code` 里调 `tools.edit` / `tools.bash` 时，**参数是 JS 源码里的字符串字面量**：
+
+- 字符串里出现**英文双引号**（哪怕是 awk 的 `print NR` 加引号）会提前结束字面量 ⇒
+  报 `expecting '}'` / `unexpected end of string`。⇒ shell 里避开双引号，JS 里用单引号或转义。
+- 单次字符串太长（~1KB 以上）也可能被截断报错 ⇒ **长内容分多次 edit 追加**，每次一小段。
+- `${...}` 与反引号在模板字符串里会被解析 ⇒ 含它们的文本先落文件再执行。
+
+#### 未落地 / 待决
+
+- **P1-6 的 ACK 合并**（上游 `ack_last_sent_tick_`，5ms 内抑制冗余 ACK）**没有**随硬上限一起落地。
+  它是带宽优化不是内存边界，本次范围（DoS 边界）不含；要补需单独评估抑制窗口对确认时延的影响。
+- **P1-3 与上游 Wave 2 的差异**：上游在 `fail_flow()` 里还会清掉该 flow 的 TX 队列残留帧，
+  本次**没有**照搬 —— 清理已发出的帧会在对端序号空间留洞，洞只能等 gap timeout 重建整个会话。
+- 本次改动**尚未提交、尚未推送**；推送前必须再问。
+- toys 仓库 `076435d` + `47f5bfd` 两个本地提交推不推、NAS/dmit 上的 `ppp.bak-*` 清不清，仍待决。
