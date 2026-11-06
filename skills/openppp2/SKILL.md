@@ -3045,6 +3045,58 @@ skill 早就写了「改 mux 后必须做真实双端测试」，这次真跑了
   `mux.rx.flow.refused = 1`（拒绝了一条未知流）—— 会话都没受影响，属于正常噪声。
 - 每台留了 2 份 `ppp.bak-*`（v2.2.18、v2.2.19 各一份，各约 30MB/份）。
 
+### 十四、未知命令的处理（审计报告 P2-8，2026-11-06）
+
+**上游的做法是「杀会话」**（未知 cmd ⇒ `ProtocolPacketActionInvalid` + `return false` ⇒ `close_exec()`）。
+**本仓库从来不是这么做的，而且这件事此前没有记录**：
+
+- 越界 cmd 在**载波读循环**里被拦下 ⇒ `break` ⇒ **一条怪帧就断掉整条链路**（会话活着，但这条链路要重建）。
+- `packet_input()` 分发层的 `else`（记 `mux.rx.unknown_cmd`）**不可达** —— 命令枚举连续，在范围内的 9 个命令全有分支。
+- 更糟的是：flow 路径上「非控制、非 per-flow-data」的命令会 `return false` ⇒ `close_exec()` **杀会话**。
+
+**第一阶段已落地**：未知命令**只跳过、只计数**，会话与载波都存活。
+
+- 判定用 `vmux_net::is_known_cmd()`，**由四个既有分类器合成**（session/connection/reliability control + per-flow data）
+  ⇒ 不会与分发逻辑漂移，也不存在「第二处枚举要同步改」的坑。
+- 三个跳过点都计数 `mux.rx.unknown_cmd`（新计数器，进 `--stats-json`）：载波循环、flow_v2 接收、compat 接收。
+- **未知命令不算「已交付」**：不推进交付前沿、不进重排缓冲、不触发 ACK —— 对端保留副本并重传。
+  静默 ACK 一个我们没处理的帧，等于告诉对端「收到了」，那才是丢数据。
+
+**第二阶段评估结论：维持「跳过 + 计数」，不要改成杀会话。**
+
+1. 失败模式方向不对：跳过 ⇒ 一个功能不通；杀会话 ⇒ 整个会话不通。
+2. **杀会话会造成重连风暴**：客户端会自动重连 ⇒ 对端发一次未知命令被杀一次 ⇒ 重连 ⇒ 再被杀 ⇒ 活锁。
+   版本不符本来只影响一个功能，会被放大成反复握手。
+3. 状态不一致的风险没那么大：承载状态和数据的命令（SYN/SYN-OK/PUSH/FIN）都是**已知**命令，
+   未知命令只可能是**将来新增**的，而新增命令时正好该定「老端遇到它怎么办」。
+
+⇒ 把 `mux.rx.unknown_cmd` 当**绊线**：长期为 0 就说明没有版本不符；一旦非零，带着数据去查。
+若将来确要终止会话，判据应是「同一对端连续 N 次」而不是「一次」。
+
+### 十五、上游的 per-link RTT 其实只做了一半（2026-11-06 逐行核对）
+
+审计报告 P1-1 写「Wave 3 per-link Path State 已闭环」，但对着 `upstream/main` 逐行看：
+
+| 环节 | 上游现状 |
+|---|---|
+| per-link 测量 | ✅ `vmux_linklayer` 有 srtt/rttvar/min_rtt/has_sample，`packet_input_ack` 按 `orig_link_id` 做 EWMA |
+| 链路归属 | ✅ `MuxRtxEntry` 有 `orig_link_id` / `last_link_id` |
+| **per-link PTO 判定** | ❌ **`current_pto(linklayer)` 没有任何调用者** —— 唯一调用点是 `CollectExpired(now, current_pto(), ...)`，用的是 session 级 PTO |
+| 过期判定 | ❌ `CollectExpired` 只有**一个** base_pto 作用于全部条目 |
+| `min_rtt_ms_` | ❌ 只写不读 |
+| 归因 | ⚠️ 归因到「首次发送链路」：重传过的帧会把重传延迟算进原链路 |
+
+⇒ 上游只闭环了**测量**，**判定**始终是会话级；它的 per-link PTO 是死代码。
+**所以在 fork 里真做 per-link 判定，比上游那份还大**（上游没做「按条目算各自超时」那一步）。
+
+工作量（按 fork 自己的代码估）：per-link 状态与归因 ~40 行；`MuxRtxEntry` 与
+`Track`/`Ack`/重传带 link_id ~80 行（fork 的 `MuxRetransmitBuffer` 是**重写过的**）；
+**按条目算各自超时**（`CollectExpired` 签名 + expired 列表带 link_id + `reliability_tick`）
+~80–120 行；测试 ~100 行 ⇒ **~300–400 行、4–5 个文件**，且带「归因对不对」的隐性风险。
+
+⇒ 更划算：**先只加观测**（per-link RTT 测量 + 每链路 RTT 分布进 `--stats-json`，不动判定，
+~60–80 行），先回答「链路到底异构不异构」，再决定要不要付那 300–400 行。
+
 **本次双端测试结果（2026-11-04）**：compat 与 flow_v2 两种 ordering 都跑通
 （HTTP 204 / HTTPS 200 / SOCKS5 204，`phase=connected`，`link.error_count=0`，
 `mux_fallback_reason` 空）；20MB 经隧道落地 **md5 与源文件一致**；
