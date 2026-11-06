@@ -2998,6 +2998,41 @@ skill 早就写了「改 mux 后必须做真实双端测试」，这次真跑了
   也会被降级成 `compat`。
 - 测完记得收尾：`kill -9`（ppp 忽略 SIGTERM）、停掉本地源站、`git worktree remove`。
 
+### 十二、ACK 合并（2026-11-04/06）
+
+审计报告 P1-6 的**第二半**：上游用 `ack_last_sent_tick_` 在 `ack_delay_ms_ / 2`（5ms）内
+抑制冗余 ACK，fork 没有这个字段，每个交付突发都发一帧 ACK。已补上，但**不能照抄上游**，
+因为 fork 的 ACK 实现和上游不是一回事：
+
+- fork 的 `maybe_send_ack()` **一次可能发多帧**（待确认的序号空间超过一帧容量时分帧发送）。
+  ⇒ 抑制判据要放在**整批之前**：一批要么全发、要么全发不出去，
+  不会出现「发了一半就被抑制」的中间态。
+- 抑制窗口**只在整批全部送达后才开启**。有帧发送失败（`unsent > 0`）时窗口保持关闭 ——
+  那些序号空间还欠着对端一个答复，不能排在抑制窗口后面等。
+
+安全性依据：可靠性定时器（10ms）每个 tick 都会再冲一次待发 ACK，抑制窗口只有 5ms；
+**强制应答（回答重传）永远不抑制**。新增计数器 `mux.ack.suppressed`。
+
+端到端实测（本地双端 flow_v2）：279 帧过隧道，**241 个 ACK 被合并**，零错误。
+
+### 十三、现网升级四端（2026-11-06 实操）
+
+- **先查谁在服役**：`ss -tn | grep -c ':7893'` 与 `grep -c ':7894'`。
+  这次是 **7894=14 / 7893=0** ⇒ 实验组在服役（与 skill 里 2026-09-18 那次相反）。
+  但用户指定「先升实验组」，就照做：对照组全程在线，满足「至少一条隧道不断」。
+- **升级顺序**：dmit 服务端 → NAS 客户端，实验组先、对照组后。
+- **升级脚本一律脱离执行**（SSH 可能随隧道一起断）：
+  `setsid nohup /bin/sh /tmp/upg-swap.sh <service> <dir> >/dev/null 2>&1 </dev/null &`
+- **两阶段**：先只下载 + 校验版本（不碰服务），确认无误再换二进制。
+  下载用 `openppp2-linux-amd64.zip`（标准版，无后缀）。
+- **换完自检**：代理 204 + `phase=connected` + `mux_receiver_ordering` +
+  `link.error_count` + 新计数器全 0。
+- **备份留在原地**：`/opt/ppp*/ppp.bak-<时间戳>`（每台 2 份，约 60MB/份）。
+- ⚠️ **dmit 的服务是包装脚本**：`ExecStart=/opt/ppp2/run-ppp2.sh` →
+  脚本里 `exec /opt/ppp2/ppp -m server -c /opt/ppp2/appsettings.json ...` ⇒
+  **换 `/opt/ppp2/ppp` 这个二进制**即可，不要动包装脚本。
+- NAS 的 ExecStart 是直接的 `/opt/ppp2/ppp --mode=client --tun-host=no --tun-mux=12 ...`。
+
 **本次双端测试结果（2026-11-04）**：compat 与 flow_v2 两种 ordering 都跑通
 （HTTP 204 / HTTPS 200 / SOCKS5 204，`phase=connected`，`link.error_count=0`，
 `mux_fallback_reason` 空）；20MB 经隧道落地 **md5 与源文件一致**；
