@@ -3084,7 +3084,7 @@ skill 早就写了「改 mux 后必须做真实双端测试」，这次真跑了
 | **per-link PTO 判定** | ❌ **`current_pto(linklayer)` 没有任何调用者** —— 唯一调用点是 `CollectExpired(now, current_pto(), ...)`，用的是 session 级 PTO |
 | 过期判定 | ❌ `CollectExpired` 只有**一个** base_pto 作用于全部条目 |
 | `min_rtt_ms_` | ❌ 只写不读 |
-| 归因 | ⚠️ 归因到「首次发送链路」：重传过的帧会把重传延迟算进原链路 |
+| 归因 | ✅ 归因精确：上游 `Ack()` 同样只在 `attempts == 0`（从未重传）时取样本 ⇒ 该帧只走首发它的那条载波 |
 
 ⇒ 上游只闭环了**测量**，**判定**始终是会话级；它的 per-link PTO 是死代码。
 **所以在 fork 里真做 per-link 判定，比上游那份还大**（上游没做「按条目算各自超时」那一步）。
@@ -3105,3 +3105,41 @@ skill 早就写了「改 mux 后必须做真实双端测试」，这次真跑了
 新增计数器 `mux.tx.flow.overflow` / `mux.tx.ctrl.cap` / `mux.tx.ctrl.cap.reject` 全程为 0
 —— 它们是 DoS 边界，正常流量不该触发。
 - toys 仓库 `076435d` + `47f5bfd` 两个本地提交推不推、the LAN host/the VPS 上的 `ppp.bak-*` 清不清，仍待决。
+
+### 十六、per-link RTT「只观测」落地（2026-11-07）
+
+第十五节说的「先只加观测」这次真的做了，提交 `b7c4dfb8`，随 `v2.2.21` 发出。
+
+**改动落在哪几个点**：
+
+- `MuxRetransmitBuffer.h`：`MuxRtxEntry` 加 `orig_link_id`（**首次发送**的那条载波），
+  `Track(..., link_id = 0)` 记录它，`Ack(..., out_link_id = nullptr)` 在出样本时回填。
+  ⚠️ **`out_link_id` 必须在 `Ack()` 入口清零**：被重传过的帧不出样本（Karn 规则），
+  如果不清零，调用方拿到的就是上一次的残留值，会把「没有归属」误当成「记的是这条载波」。
+- `vmux_net.h/.cpp`：`vmux_linklayer` 加 4 个字段（`rtt_srtt_ms_` / `rtt_rttvar_ms_` /
+  `rtt_min_ms_` / `rtt_samples_`），`note_link_rtt_sample()` 做 EWMA（7/8 + 3/4），
+  `publish_link_rtt_spread()` 算离散度并发到计数器。
+- **发送点传载波 id**：`underlyin_sent` 里 `track_sent_frame(..., linklayer->id_)`。
+- **ACK 点归因**：`packet_input_ack` 取 `sample_link_id` 后调 `note_link_rtt_sample()`。
+- **周期刷新**：离散度快照除了「每个样本刷新」，还**每个 tick 刷新一次** ——
+  载波退休后必须从离散度里掉出去，而「发现它退休的那个样本」可能永远不来（那帧丢了）。
+
+**新统计键**（`--stats-json`）：`mux.rtt.link.count` / `min_srtt_ms` / `max_srtt_ms` /
+`spread_ms` / `heterogeneous`。`heterogeneous` 的判据是 `max >= min * 2` ——
+意思是「会话级探测超时对慢的那条载波只有一半、对快的那条又翻倍」。
+
+**「只观测」怎么被钉死**（这是这版最要紧的部分）：新增
+`tests/cpp/mux_per_link_rtt_observation_test.cpp`，其中一条是**源码契约断言** ——
+per-carrier 字段只允许出现在 `note_link_rtt_sample` 和 `publish_link_rtt_spread`
+两个函数里，任何判定路径碰它就红；上游那个没接线的 `current_pto(linklayer)`
+不许被接上。负向验证实测：断开载波 id 接线 → 红；让 `current_pto()` 读观测 → 红。
+
+**本地双端实测（2026-11-07）**：flow_v2 下服务端 `count=2 / 12–the measured delay / spread=the measured delay`，
+客户端 `count=5 / 10–the measured delay / spread=the measured delay / heterogeneous=1` ⇒ **载波之间确实有差异**
+（客户端最快 the measured delay、最慢 the measured delay，超过 2 倍），`link.error_count=0`、`mux.rx.unknown_cmd=0`。
+
+⚠️ **`mux.tx.flow.overflow=1` 与本次改动无关**：8 对交替 A/B（开/关观测各 8 轮）
+里 **两组都出现**这个计数 ⇒ 是 P1-3 那条 per-flow TX 上限在单流大文件下的既有行为。
+交替 A/B 的吞吐中位数：开观测 the size / 关观测 the size（Ns 窗口），
+两个子组的方向相反 ⇒ **无可测量的性能回归**。
+
