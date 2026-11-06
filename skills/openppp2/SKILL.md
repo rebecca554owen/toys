@@ -3033,6 +3033,18 @@ skill 早就写了「改 mux 后必须做真实双端测试」，这次真跑了
   **换 `/opt/ppp2/ppp` 这个二进制**即可，不要动包装脚本。
 - the LAN host 的 ExecStart 是直接的 `/opt/ppp2/ppp --mode=client --tun-host=no --tun-mux=12 ...`。
 
+**v2.2.20 现网实测（2026-11-06）**：
+
+- 四端全部升到 v2.2.20-2488726e，两组 204 都通（the port / the port），
+  `phase=connected`、`mux_receiver_ordering=flow_v2`、`link.error_count=0`。
+- **ACK 合并计数器 `mux.ack.suppressed` 在现网是 0** —— 不是没生效，是**现网这条链路太慢**
+  （公网下载 ~200–the measured rate，一帧 the size 约 the measured delay 一帧 ⇒ ACK 间隔远大于 the measured delay，没有可合并的突发）。
+  本地双端高速突发时是 279 帧里合并 241 个。
+  ⇒ **看到 0 不要当成坏了**：它只在高速突发时才会动。
+- 现网这次还看到 `mux.rtx.pto = 1`（一次重传超时）、`mux.rx.flow.unknown_cid = 1` +
+  `mux.rx.flow.refused = 1`（拒绝了一条未知流）—— 会话都没受影响，属于正常噪声。
+- 每台留了 2 份 `ppp.bak-*`（v2.2.18、v2.2.19 各一份，各约 the size/份）。
+
 **本次双端测试结果（2026-11-04）**：compat 与 flow_v2 两种 ordering 都跑通
 （HTTP 204 / HTTPS 200 / SOCKS5 204，`phase=connected`，`link.error_count=0`，
 `mux_fallback_reason` 空）；the size 经隧道落地 **md5 与源文件一致**；
