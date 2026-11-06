@@ -2965,5 +2965,44 @@ cmake --build build/vmux-regression --target vmux_receive_semantics_test
   它是带宽优化不是内存边界，本次范围（DoS 边界）不含；要补需单独评估抑制窗口对确认时延的影响。
 - **P1-3 与上游 Wave 2 的差异**：上游在 `fail_flow()` 里还会清掉该 flow 的 TX 队列残留帧，
   本次**没有**照搬 —— 清理已发出的帧会在对端序号空间留洞，洞只能等 gap timeout 重建整个会话。
-- 本次改动**尚未提交、尚未推送**；推送前必须再问。
+- 本次改动已提交到本地 `dev`（`45d8d2ad`），**推送状态见第十一节末尾**。
+
+### 十一、本地双端测试怎么跑（2026-11-04 实跑补记）
+
+skill 早就写了「改 mux 后必须做真实双端测试」，这次真跑了一遍，把坑记下来：
+
+- **起 server 必须 root**：`ApplicationInitialize.cpp` 有 `!proxy_mode_ && !IsUserAnAdministrator()`
+  检查（macOS 上就是 `getuid()==0`）。本机 `sudo` 被 `no_new_privs` 拦死，
+  **只能用 `osascript` + 显式凭据**（见开头「⭐ 提权」一节）。
+  只有 `with administrator privileges`（不带 `user name`/`password`）会弹 GUI 授权框等人工点；
+  带显式凭据则**完全不弹框**。
+- **client 用 `-m proxy`**：不需要 root，可直接普通用户身份起，**不要用 `-m client`**
+  （会建 TUN，和本机 mihomo 抢路由，链路会反复集体掉光）。
+- **配置要先重建**：`/tmp/ppp-local/appsettings.json` 是 `/tmp` 清理后就没了的东西，
+  从 `~/Documents/GitHub/toys/openppp/appsettings.json` 复制。
+- **验收三件套**：HTTP 代理 `connectivitycheck.gstatic.com/generate_204` 期望 204、
+  HTTPS CONNECT 期望 200、SOCKS5（`socks5h://admin:password@127.0.0.1:the port`）期望 204；
+  再看 stats 的 `link.error_count` 与 `phase`。
+- ⚠️ **目的地址是 loopback 时流量会绕过隧道**：客户端代理连本机地址直连，
+  `mux.link.recv` 只有个位数帧，测不到 mux。想让流量真的过隧道，
+  目的地址要用**本机的 LAN IP**（`ipconfig getifaddr en0`）或公网地址，
+  本地源站要绑 `0.0.0.0` 而不是 `127.0.0.1`。
+- ⚠️ **公网下载的抖动远大于二进制差异**：单轮 the size 下载，基线 N~Ns、
+  改动后 N~Ns，**同一构建内部的极差就有 Ns** ⇒ 要判断有没有性能回归，
+  必须**交替多轮取中位数**，单次对比必然得出假结论。
+- **基线 A/B 怎么编**：`git worktree add /tmp/ppp-base <基线 commit>`，
+  再用同一份 third-party 配一个独立的 build 目录编出 `ppp`，两份二进制用同一套参数轮换跑。
+- **flow_v2 要服务端配合**：ordering 由**服务端** `mux.mode` 决定，
+  服务端 `--mux-mode=balance` + 客户端 `--mux-mode=flow` 才协商出 `flow_v2`
+  （客户端 stats 的 `mux_receiver_ordering` 可验）。服务端不换，客户端单独写 `--mux-mode=flow`
+  也会被降级成 `compat`。
+- 测完记得收尾：`kill -9`（ppp 忽略 SIGTERM）、停掉本地源站、`git worktree remove`。
+
+**本次双端测试结果（2026-11-04）**：compat 与 flow_v2 两种 ordering 都跑通
+（HTTP 204 / HTTPS 200 / SOCKS5 204，`phase=connected`，`link.error_count=0`，
+`mux_fallback_reason` 空）；the size 经隧道落地 **md5 与源文件一致**；
+与基线 `ca46a129` 交替三轮 A/B，中位数基线 Ns / 改动后 Ns，
+**同一构建内部极差 Ns** ⇒ **无可测量的性能回归**（差异全部来自公网抖动）。
+新增计数器 `mux.tx.flow.overflow` / `mux.tx.ctrl.cap` / `mux.tx.ctrl.cap.reject` 全程为 0
+—— 它们是 DoS 边界，正常流量不该触发。
 - toys 仓库 `076435d` + `47f5bfd` 两个本地提交推不推、the LAN host/the VPS 上的 `ppp.bak-*` 清不清，仍待决。
