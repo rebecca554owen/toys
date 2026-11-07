@@ -3143,3 +3143,31 @@ per-carrier 字段只允许出现在 `note_link_rtt_sample` 和 `publish_link_rt
 交替 A/B 的吞吐中位数：开观测 the size / 关观测 the size（Ns 窗口），
 两个子组的方向相反 ⇒ **无可测量的性能回归**。
 
+
+### 十七、v2.2.21 上线记录（2026-11-07）
+
+`v2.2.21` = P2-8 第一阶段（未知命令跳过 + 计数）+ per-link RTT 只观测，一起发。
+
+- 提交：`d1e28069`（P2-8）、`b7c4dfb8`（per-link RTT）、`6f643411`（版本号）。
+- CI：4 个构建 + Go Guardian + Test· Unit **7/7 全绿**（Test·Unit 约 N 分钟）。
+- Release：资产 **19/19**，与 v2.2.20 逐项同名同结构；ghcr `v2.2.21` 已出。
+- 现网四端全部 `v2.2.21-6f643411`，两组 204 均通，`phase=connected`、
+  `mux_receiver_ordering=flow_v2`、`link.error_count=0`、`mux.rx.unknown_cmd=0`。
+
+**现网载波实测（这次观测的正式答案）**：
+
+| 端 | 有样本的载波 | 最快 | 最慢 | 离散度 | 异构 |
+|---|---|---|---|---|---|
+| the LAN host 对照组 ppp | 5 | the measured delay | the measured delay | the measured delay | 否 |
+| the LAN host 实验组 ppp2 | N | the measured delay | the measured delay | the measured delay | 否 |
+| the VPS ppp | 2 | the measured delay | the measured delay | the measured delay | 否 |
+| the VPS ppp2 | N | the measured delay | the measured delay | the measured delay | 否 |
+
+⇒ **现网 12 条载波走的是同一条路径**（全 IPv6 到同一服务端），RTT 相差 5–the measured delay，
+远不到「慢的比快的一倍」⇒ **会话级探测超时对任何一条载波都不算错**。
+这正是当初决定「先只加观测」的原因：结论是「不异构」，所以 per-link 判定
+那 300–400 行现在**没有买的必要**。
+
+⚠️ **备份又多了**：每台每个目录现在有 **4 份** `ppp.bak-*`（v2.2.18/19/20/21 各一份），
+the VPS 的 `/opt/ppp`+`/opt/ppp2` 已占 219M+182M，the LAN host 同理 ⇒ 磁盘没问题，但要不要清，
+仍待苏倚定。
