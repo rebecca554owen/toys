@@ -3171,3 +3171,66 @@ per-carrier 字段只允许出现在 `note_link_rtt_sample` 和 `publish_link_rt
 ⚠️ **备份又多了**：每台每个目录现在有 **4 份** `ppp.bak-*`（v2.2.18/19/20/21 各一份），
 the VPS 的 `/opt/ppp`+`/opt/ppp2` 已占 219M+182M，the LAN host 同理 ⇒ 磁盘没问题，但要不要清，
 仍待苏倚定。
+
+### 十八、mux 整理：撤观测、接孤儿测试、看清上游差异（2026-11-08）
+
+**① per-link RTT 观测整体撤掉（提交 `351214ca`）**
+
+问题已经答完，机制就没必要永远挂在热路径上。v2.2.21 上了现网四端，测得：
+实验组 12 条载波 107–the measured delay、对照组 5 条 111–the measured delay、the VPS 侧 2 条 120–the measured delay 与 12 条 105–the measured delay，
+`heterogeneous` 在**四端全历史从未非零** ⇒ 载波不异构。
+
+**只删 5 个发布键是错的** —— 那会留下「热路径上维护一份没人看的状态」，比全留和半留都差。
+所以整套撤：`MuxRuntimeCounters` 的 5 个字段 + 5 个原子、`RuntimeStatsJson` 的 5 行发布、
+`vmux_linklayer` 的 4 个字段、`note_link_rtt_sample()` / `publish_link_rtt_spread()`、
+`MuxRtxEntry::orig_link_id`、`Track()`/`Ack()` 的 link_id 形参 ⇒ `Ack()` 回到 fork 原生 4 参。
+实现方式：`git revert --no-commit b7c4dfb8`（用只读 `git merge-tree` 验过零冲突）。
+
+**代价必须记账**：审计 P1-1 的恢复条件 (2)「同一会话内各链路 RTT 明显分层」**依赖这个观测才测得到**
+⇒ 撤掉后该条件再次不可判定。已采到的现网数据写进了审计报告留档。
+
+**顺带补了一个测试缺口**：`mux_runtime_counters_test` 原来只钉「发布的键集合」，
+**登记表里加了字段但没发布是抓不到的**（热路径白更新、统计里看不见）。
+现在加了一条锁步断言：`sizeof(MuxRuntimeCounters) == 键数 × 8`（结构体全是 uint64 ⇒ size 即字段数）。
+
+**② 上游 10 个 vmux 测试：9 个接线，1 个隔离（`d00f69b5` / `ee58628d` / `1cda657f`）**
+
+**上游全接了，fork 一个没接** —— 文件躺着 5154 行从不运行。3 个**直接能编译**，6 个要按 fork 接口移植。
+
+移植中撞见的**三处真实语义差异**（都不是 bug，是 fork 的既定设计，断言按 fork 改）：
+
+- **确认是累积交付前沿**：上游只按 SACK ranges 释放；fork 的 `largest` 是对端的**连续交付前沿**，
+  ≤ 前沿的全释放（否则已送达的帧会被一直重传到预算耗尽）。`vmux_qa001_ack_malicious_test` 的 3 处断言按此改写。
+- **per-flow RTX 预算**：上游在 vmux_net 里自己记账（`rtx_flow_bytes_`），fork 记在缓冲里并用 `BytesForCid()` 暴露；
+  数值也不同 —— 上游测试用的 session the size / per-flow the size，**fork 真实值是 the size / the size**。
+  上游那份文件**自带一份 mux 常量副本**，是上游的值 ⇒ 已删掉副本，改用 `ppp/stdafx.h` 的真值。
+- **退避上限**：上游 `base_pto << min(attempts,5)`（32×）且另有 pto_max；fork 是 `pto << min(attempts,3)`（8×）。
+
+**没移植的上游机制**（都是 fork 主动不要的）：快速重传候选表及其时间门限（fork 走纯 PTO，审计 P1-5）、
+每条目的载波 id（fork 没有 per-link 判定）、`pto_max` 独立钳位（8× 已封顶）。
+⇒ 删掉的用例是 wave0 的 2 个、ack_malicious 的 1 个、wave4 的 6 个；每处都在文件里留了注释说明依据。
+
+**记下来没改的一处**：上游退避会饱和（移位不溢出），fork 的 `BackoffWindow` 不饱和。
+fork 移位上限 3 次、探测超时来自毫秒级 RTT 估计 ⇒ 实际不可能溢出，**不改生产代码**，
+把上游那条用例改成了「探测超时小到不可能溢出」的断言并写明理由。
+
+**③ 上游差异的真实量级（`docs/vmux/VMUX_AUDIT_REPORT.md` 已记）**
+
+`git diff upstream/main dev -- ppp/app/mux/` 显示 `vmux_net.cpp` 9218 行差异，**一半是行尾假象**：
+上游这两个文件 CRLF/CR/LF 混排（`vmux_net.cpp` 4043 行带 CR、`vmux_skt.cpp` 1042 行带 CR），fork 是干净 LF。
+**真实语义差异：`vmux_net.cpp` 1766 行、`vmux_skt.cpp` 193 行。**
+
+逐个核对符号后：fork **独有** `closed_flow` 家族（27 处）、`SessionEpoch`、`MuxBacklogWatchdog`、
+`is_known_cmd`、`post_internal(..., bool* recoverable)`；fork **真缺**的只有 5 个符号，且全是
+「搬家」或「主动不做」。⇒ **fork 不是少了上游功能，是同一批边界换了一套（多数更严）实现**；
+真实成本是**同步成本**（上游行尾混排 ⇒ 每次同步全文冲突）。
+
+**④ 还没做的（留档）**：
+
+- stats 文件 **the size/天/实例、无轮转**（1 行/秒 × 1546 字节），一年 the size/实例、四端约 the size/年；
+  `mux_counters` 段占整行 770 字节（N%）。撤掉 N 个 RTT 键后单行少约 90 字节（≈N%）。
+- 现网每台每目录 **4 份 `ppp.bak-*`**（v2.2.18/19/20/21），the VPS `/opt/ppp`+`/opt/ppp2` 已占 219M+182M。
+- `tests/cpp/` 里还有 **14 个继承自上游、未接线的测试文件**（非 vmux），清单在
+  `tests/cpp/upstream-reference/README.md`。
+- **上游 `vmux_net.cpp` / `vmux_skt.cpp` 的行尾混排**（本轮只在文档记录，未动上游、未加 lint）。
+
