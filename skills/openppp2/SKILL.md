@@ -3696,7 +3696,8 @@ BREAKING CHANGE 段自相矛盾：一处说「恢复」了 `schedulable()` 谓�
 - `mux.tx.flow.throttled` 在拥塞窗口涨、在低峰接近 0 ⇒ 背压按预期只在真正排队时出现。
 - `mux.tx.backlog.stall` 涨 = 队列真的卡死、会话被重建（比 `overflow` 严重得多）。
 - 阶梯每档都要 **0 失败、0 截断、字节数完整**；只看 Mbps 会掩盖「跑得快但被掐断」。
-- 两组端口要一致；不一致先查两端配置差异，再查路径。
+- 两组端口在**同一窗口**下比：差值归因到调度器（stripe vs balance），不是配额。
+- 报告必须把快照里的 `cfg_mode` / `cfg_tx_max_bytes` 列出来，说明差异在哪。
 
 ### ⚠️ 跨组比吞吐前，先确认发送端调度器一致（2026-11-08 踩到）
 
@@ -3708,8 +3709,15 @@ BREAKING CHANGE 段自相矛盾：一处说「恢复」了 `schedulable()` 谓�
 现网当时就是：slot1 发送端 `mux.mode=stripe`、slot2 发送端 `mux.mode=balance`，
 而 bulk 数据的发送端正是服务端 ⇒ **两组的速率差要归因到调度器，不能算到配额头上**。
 
-=> **跨窗口对比必须同组比同组**（the port 对 the port、the port 对 the port）；
-   跨组比吞吐只在发送端调度器一致时才有意义。
+⇒ **这个分组是故意配的**（用户确认）：slot1 = stripe（逐包轮询，实验性调度器）、
+slot2 = balance（竞争法 + 每流定序，生产主力，见「生产主力应该用 balance」那条结论）。
+两组的每流配额都是 16 MiB、序都是 flow_v2 ⇒ **配额在这组对照里是被控常量**。
+
+⇒ 所以两种对比都成立，但要说清各自回答什么：
+   - **同组跨窗口**（the port 对 the port、the port 对 the port）= 路径窗口的影响；
+   - **同窗口跨组**（the port 对 the port）= 调度器的影响。
+   ⇒ 「配额 X 比配额 Y 好」的结论仍然要求**同一组、只改配额**；
+   换组比较时那个结论不成立。
 => 快照脚本现在带本端配置（`cfg_mode` / `cfg_turbo` / `cfg_reorder_bytes` / `cfg_tx_max_bytes` /
    `cfg_rtx_flow_bytes`），报告时把 cfg 列出来，差异在哪儿一眼可见。
 => 服务端 stats **不发布** `effective_mux_mode` / `mux_receiver_ordering`（客户端才发），
