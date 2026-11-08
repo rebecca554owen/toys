@@ -3667,3 +3667,33 @@ BREAKING CHANGE 段自相矛盾：一处说「恢复」了 `schedulable()` 谓�
 
 - **v2.2.24 只有 tag、没有 release** ⇒ v2.3.0 的 Full Changelog 基线用**上一个已发布版本** v2.2.23。
   补发 v2.2.24 的 release 会抢 Latest 徽标，要发的话记得发完把 Latest 标回 v2.3.0。
+
+## 晚高峰 / 低峰对照测量（2026-11-08 建立）
+
+### 为什么要有这套脚本
+
+「限流到底有没有起作用」这个问题，只有在**路径本身会劣化**的时候才问得出来。
+干净链路上队列永远排得空，任何限流逻辑都不触发 ⇒ 测不出来。
+所以固定两个窗口各跑一次**完全相同**的测量，再对比：
+
+- **晚高峰**：外层路径 RTT 抬升 + 丢包出现（劣化窗口）
+- **低峰**：同一路径的正常窗口
+- 源站固定 `http://the address:the port/test100mb.bin`，**必须从 the LAN host 本机发起**
+  （Mac 走 Wi-Fi 测会被限流，数字没意义）
+
+### 三个脚本（`~/.agents/skills/openppp2/scripts/`，scripts 目录在 gitignore 里，只存本机）
+
+| 脚本 | 作用 |
+|---|---|
+| `mux-snap.py` | 从 stats jsonl 抽一份紧凑快照（阶段、链路数、ordering、7 个计数器）；**the VPS 与 the LAN host 上都要放一份** |
+| `mux-measure.sh <label>` | 一轮完整测量：外层直连基线 3 次 → 四端计数器 BEFORE → 阶梯（the port/the port × conc 1,2,4,8）→ 四端计数器 AFTER；产物 `/tmp/mux-measure/<label>-<ts>.txt`，自动同步到 the LAN host |
+| `mux-compare.py <A> <B> [标签A] [标签B]` | 把两份样本解析成 markdown 对照表（基线 / 阶梯 / 完整性 / 计数器增量） |
+
+### 判读
+
+- **`mux.tx.flow.overflow` 与 `mux.rx.flow.reset` 必须恒为 0** —— 两者一起涨就是有流被杀
+  （帧数兜底抢在字节上限前面的老症状）。
+- `mux.tx.flow.throttled` 在拥塞窗口涨、在低峰接近 0 ⇒ 背压按预期只在真正排队时出现。
+- `mux.tx.backlog.stall` 涨 = 队列真的卡死、会话被重建（比 `overflow` 严重得多）。
+- 阶梯每档都要 **0 失败、0 截断、字节数完整**；只看 Mbps 会掩盖「跑得快但被掐断」。
+- 两组端口要一致；不一致先查两端配置差异，再查路径。
