@@ -2165,10 +2165,70 @@ bash tools/check_vcxproj_sources.sh
 ```
 
 **notes 写完先给用户预览再推**（`gh release edit` 是远端写操作）。
-Compare 链接的基准用**上一个 tag**，不要出现 `N.N...` 这种上游遗留串。
+
+Compare 链接的基准用**上一个已发布 release 的 tag**，不是"上一个 bump 出来的 tag"。
+⚠️ **版本线会跳号**：v2.2.24 只打了 tag、从未发布 release，v2.3.0 直接接在 v2.2.23 后面。
+此时若按"上一个 tag"取基准，`compare/vN.24...vN.0` 会**漏掉 v2.2.23 的全部变更**；
+若那个 tag 压根没打（v2.1.17），链接直接 404。
+⇒ 发布后一律用 `gh release list` 核对**上一个已发布版本**再写基线。
+
+**notes 写的是「这一版相对上一个已发布版本到底改了什么」**，不是「这个特性长什么样」。
+⇒ 写之前先跑 `git diff --stat <上一个已发布 tag> <新 tag>`，只列**这一版才有**的改动；
+已经在更早版本发布过的特性**不要重复写**。
+（2026-11-08 教训：v2.3.0 的 notes 初稿把 v2.2.22 就已发布的配额特性又写了一遍，
+而这一版真正的增量只有「帧数兜底不再抢在字节上限前面」+ CI 合并 + 文档重写 + 版本号。）
+
+**notes 里不要写死"请升级到 vX.Y.Z"**。写下版本号前先确认那个 release 真的存在
+（`gh release view <tag>`）；版本线跳号时它就是死链——v2.2.23 的 notes 曾指向从未发布的
+v2.2.24，正文与 Full Changelog 两个位置都要改。
+需要提"后续版本"时，写**实际已发布的那个**版本号。
+
+### 不要出现内部部署语境
+
+**删**（这些是苏倚自己 the VPS / the LAN host 那套部署的观测，不属于产品信息）：
+- 主机名（the VPS、the LAN host）、内网 IP、实例端口（the port / the port / the port）、实例路径（`/opt/ppp/...`）
+- 部署观察词：「现网」「本机」「晚高峰」「公网链路」「坏路径」「同一条运营商线路」
+- 自己配置文件里的具体取值（`flow_bytes=20 MiB`、`reorder=40 MiB`、`tun-mux=12`）
+
+改成**产品级**表述：「链路带宽打满时」「链路质量波动时」「多路并发的大文件场景」。
+判据 = **换一套干净的部署环境，这句话是否仍然成立**；只成立一次的那句就是内部数据。
 
 ⚠️ **补建历史版本的 Release 会抢走 Latest 徽标** —— Latest 按**发布时间**算而非版本号。
 补完立刻 `gh release edit <真正的最新版> --latest` 标回来。
+
+### 重发一个已经发过的 tag（2026-11-08 v2.3.0 实操）
+
+顺序（每步都是远端写操作，先跟用户确认）：
+
+1. **留回滚点**：`git tag -a archive/<名字> <旧提交> -m ...`（本地即可）
+2. **移动 tag 并强推**：`git tag -f -a <tag> dev -m '<tag>' && git push -f origin <tag>`
+   ⇒ **tag 打在 dev 上**（dev 是唯一权威线），不是打在某个临时分支上
+3. **等 4 个平台构建**（tag 触发）跑完
+4. **删旧 release**：`gh release delete <tag> -R rebecca554owen/openppp2 --yes`
+   （release 与 tag 是两件事：删 release 不删 tag）
+5. **重建 release**：`gh workflow run release.yml --ref dev -f tag=<tag> -f title=<tag>`（约 19 个资产）
+6. **写 notes**：`gh release edit <tag> --notes-file <file>`
+7. **ghcr**：`gh workflow run build-docker.yml --ref <tag> -f tag=<tag> -f arch=all`
+8. 现网升级 + 复测
+
+⚠️ 顺序上**先让新构建跑完再删旧 release**，减少 release 页 404 的窗口。
+⚠️ GitHub 资产 CDN 会 504 ⇒ 走 API 直链下载：
+`https://api.github.com/repos/<repo>/releases/assets/<id>` + `Accept: application/octet-stream`，
+再用 `gh release view --json assets` 给的 `digest` 核对 sha256。
+
+### 分支与备份清理
+
+重组历史会留下一堆「近似分支」（`rebuild/final-*`、`backup/*`、`src/*`）和重复备份。
+
+⇒ 清理前先算**覆盖**：对每个待删分支求 `git rev-list <分支> --not <保留集>`，
+非空就先 `git tag -a archive/<名字> <提交>` 兜住，再删分支。
+标签不占分支列表，比留分支干净，历史也不会丢。
+
+⇒ 保留集通常是：`dev`、`main`、未合并的特性分支（如 `inet6`）、全部 `v2.*` 发布 tag、
+以及重建脚本依赖的源分支（`tidy/mux-consolidation` —— `/tmp/build-themed.py` 里写死 SRC）。
+
+⇒ 顺手清现网主机上重复的二进制备份：每目录只留最近 2 份 `ppp.bak-*`，
+其余用 `find ... -delete`（**不要用 `rm`**，会被安全网关拦）。
 
 ## GitHub 发布流程（v2.1.13 实操记录）
 
@@ -3549,4 +3609,30 @@ CI 的 LeakSanitizer 报「23 个分配 / 8083 字节不可达」。
 清之前先 `git checkout <分支> -- <路径>` 恢复被误删的跟踪文件。
 ⚠️ 坑：`git show --name-only` 对**重命名**只给新路径 ⇒ 旧路径不会被删 ⇒ 文件在两处同时存在。
 要用 `--name-status` 解析 `R` 行的两端。
+⚠️ 坑：**同一个文件被多个组触及**（早期 mux 提交也改过审计报告）⇒ 「最后触及者」会把文件
+判给后面的组，内容被旧版覆盖。解法：给跨组文件**显式指定归属组**（审计报告归 docs 组、
+`ppp/stdafx.h` 归 mux 组）。
+⚠️ 坑：`git checkout <rev> -- <file>` **不保留可执行位** ⇒ 脚本模式要单独 chmod。
+
+⇒ **commit message 也要按代码当前实际状态写**（2026-11-08 用户指出 `087ce2c4` 的
+BREAKING CHANGE 段自相矛盾：一处说「恢复」了 `schedulable()` 谓词，另一处说「移除」了它，
+还把后来已经恢复的 per-flow 配额与控制队列硬上限列为已移除）。
+
+⇒ **message 与代码必须一致**，整理历史时要逐条核对：
+
+- 声称「移除」的符号，先 `git grep` 确认**当前**代码里真的没有；
+- 声称「恢复」的符号，确认**当前**代码里真的有；
+- 早期提交描述的中间状态，若后来已改回，按**当前状态**写；
+- 现场实测数值（次数、字节数、内核计数器）不写进 message。
+
+⇒ **文档要按代码当前实际状态写，不是按改动流水账写**（2026-11-08 用户要求）。
+审计报告这类文档的正确写法：
+
+- 条目写「**当前实现**」：两级上限各是什么、越界时什么行为、有效值怎么算、
+  不变量是什么、回归用例是哪几个。
+- **不写**「2026-11-04 重新落地 / 2026-11-08 修正」这种过程叙述 —— 读者要的是现在是什么样。
+- 保留**决策记录**（为什么不做某件事、代价是什么），那是有信息量的；
+  但「已实施 → 已撤销」要改写成「评估过后已撤回 + 依据 + 恢复条件」。
+- **不写现场数值**（实测 Mbps、现网 RTT、内存占用），那是内部运维信息。
+- 文档改动跟代码改动**同一个提交**（不要单开一个末尾的 docs 提交）。
 
