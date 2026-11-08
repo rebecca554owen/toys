@@ -3234,3 +3234,56 @@ fork 移位上限 3 次、探测超时来自毫秒级 RTT 估计 ⇒ 实际不�
   `tests/cpp/upstream-reference/README.md`。
 - **上游 `vmux_net.cpp` / `vmux_skt.cpp` 的行尾混排**（本轮只在文档记录，未动上游、未加 lint）。
 
+
+### 十九、不变量变成断言 + fuzz harness（2026-11-08）
+
+**① P3-12 / P3-13 为什么只能「降级保留」**
+
+审计把「rx_links_ 遍历不持锁」「tx_completion_mutex_ 与 syncobj_ 锁序」降级保留，
+根因是**不变量只存在于注释里**：strand 亲和性、三个锁域独立、connection_id 不复用，
+这三条没有任何东西会在被破坏时失败，破坏的后果是几个月后一次查不到原因的数据损坏。
+
+现在三条都成了可执行断言（提交 `7eedb25c`）：
+
+- **strand 亲和性**：`vmux_net::assert_on_strand(where)`，`#ifndef NDEBUG` 编译掉（release 零开销）。
+  入口：`enqueue_flow_tx` / `note_ack_pending` / `maybe_send_ack` / `process_tx_all_packets`。
+  ⚠️ **`post_internal` 故意不断言** —— 它**设计上就允许 strand 外调用**并用返回 false 报告，
+  行为测试里专门有 `on_strand=false` 的用例。第一版加了断言，**Debug 构建下行为测试直接 abort**，
+  才发现这层语义。断言要放在真正碰队列的地方，不是那扇允许从外面推的门。
+- **三个锁域互不嵌套**：`syncobj_`（载波握手域）/ `tx_completion_mutex_`（发送完成域）/
+  `runtime_state_mutex_`（对外发布域）。契约测试按函数切分源码，断言**没有函数同时持有两个**，
+  且三个域都**确实被取过**（否则改名也能过）。
+- **connection_id 生命周期**：只播种一次随机起点、之后只自增、**从不清零**；号段耗尽就拒绝新连接
+  （`connection_id_wrap_`）而不是回收旧号；新 session 计数器从 0 开始 ⇒ 号段独立。
+
+新增 `tests/cpp/mux_invariants_contract_test.cpp`（源码契约断言，同 `mux_connect_yield_lifetime_contract_test` 套路）。
+负向验证三处全中：同函数持两个锁域 / 拿掉一个 strand 断言 / 重置 connection_id 计数器 ⇒ 都变红。
+
+⚠️ **断言只在 Debug 构建里活着** ⇒ 验证必须用 Debug 构建。本机另开了 `build/vmux-debug`
+（`-DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5`，cmake 4.x 需要这个参数），
+本地双端用 **Debug 版 ppp** 跑了一遍：204/204/204 + the size 过隧道 md5 一致 + `link.error_count=0`，
+日志里零断言。**用 Release 构建跑本地双端是验不到 strand 断言的。**
+
+**② coverage-guided fuzz（VMUX-FUZZ-001，提交 `66496276`）**
+
+两个目标（`tests/fuzz/`，由根 CMakeLists 的 `ENABLE_VMUX_FUZZ_TEST` 控制）：
+
+- `fuzz_vmux_ack`：ACK 帧解码器 + 重传缓冲的确认路径（审计点名的「恶意 ACK range 经完整 session 输入路径」）。
+  不变量：确认帧**不能**让保留集合变大、不能破字节上限、**每个序列空间的字节账必须与实际还在的条目一致**。
+- `fuzz_vmux_frame`：一帧 vmux 帧走命令分发器（P2-8「未知命令只跳过」的反面 —— 跳过的前提是任何字节都不能把会话带崩）。
+  分发器是私有的 ⇒ 用 `vmux_fuzz_test_access`（vmux_net.h 里新加的 friend）。
+
+**踩到的坑**：
+
+- **Apple clang 没有 libFuzzer 运行时**（缺 `libclang_rt.fuzzer_osx.a`）⇒ macOS 必须用
+  **Homebrew LLVM**（`/opt/homebrew/opt/llvm/bin/clang++`，实测可链接）；CI 的 ubuntu clang 自带。
+- **fuzzer 会把新语料写进语料目录** ⇒ 第一版提交把 181 个 fuzzer 自己写的语料文件带进了仓库。
+  改成：**仓库语料只留人工种子**（7 个 ACK + 6 个帧），fuzzer 在**构建目录**里工作，
+  CI 把工作语料当 artifact 上传。
+- **帧目标会积累流**（SYN 帧建流）⇒ 会话每 **64 轮**重建一次；重建前先 `stop()` 旧 context，
+  否则 strand 上排队的 lambda 持有 `self`，旧会话不会立刻释放。
+- **ASan 隔离区会撑 RSS** ⇒ `ASAN_OPTIONS=quarantine_size_mb=128:malloc_context_size=8`。
+
+实测：ACK 目标 **3800 万次迭代/N 秒**、帧目标 **5800 万次迭代/N 秒**，零崩溃、零不变量破坏，
+退出时 LeakSanitizer 报无泄漏。
+
