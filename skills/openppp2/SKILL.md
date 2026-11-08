@@ -3287,3 +3287,100 @@ fork 移位上限 3 次、探测超时来自毫秒级 RTT 估计 ⇒ 实际不�
 实测：ACK 目标 **3800 万次迭代/N 秒**、帧目标 **5800 万次迭代/N 秒**，零崩溃、零不变量破坏，
 退出时 LeakSanitizer 报无泄漏。
 
+## v2.2.22 发版与现网升级（2026-11-08）
+
+### 这一版改了什么（根因 → 修法）
+
+v2.2.19 引入的「每流 TX 队列硬上限 1 MiB / 256 帧」与本 fork 的每流窗口**不匹配**：
+窗口是 `mux.flow.reorder.bytes`（现网 the LAN host 40 MiB、the VPS 未配 ⇒ 默认 8 MiB），
+而队列上限写死在 `PPP_MUX_TX_FLOW_MAX_BYTES`（1 MiB）⇒ **队列上限比它要缓冲的窗口小 8~40 倍**。
+
+两个后果都不是「隧道慢」，是队列自己掐自己：
+
+- **天花板**：每流在途被压到 1 MiB ⇒ 单流 ≈ 1 MiB / RTT ≈ 40~the measured rate。
+- **崩塌**：瞬时超限走 `fail_flow()` **直接杀流** ⇒ 客户端重试、下载中断（curl exit 18/28）。
+  the VPS 服务端计数器表现为 `mux.tx.flow.overflow` 与 `mux.rx.flow.reset` **一一相等**。
+
+v2.2.22 的修法（提交 `df4ff9b4`）：
+
+- 有效配额 = `mux.tx.flow.max_bytes`（**0 = 自动**）否则 `mux.flow.reorder.bytes`，夹在 [1 MiB, 64 MiB]；
+  帧数配额按字节配额同步放大（`max(256, quota/the size+1)`）。
+- **两级语义**：超软限 = **背压**（只把该流读泵与排空重新耦合，不杀流）；超硬上限（2×）才 `fail_flow()`，
+  且只关这一条流 ⇒ 审计报告 P1-3 的 DoS 不变量保留。
+- 新计数 **`mux.tx.flow.throttled`**（被节流次数）。
+
+### 现网部署（四端全部 v2.2.22-d3bd8352）
+
+- 顺序照旧：**实验组（the VPS `:the port` + the LAN host `:the port`）两端一起升 → 验 204 → 对照组（`:the port` / `:the port`）**。
+  升之前先看谁在服役：`ss -tn | grep -c ':the port'` vs `':the port'`（本次 12 : 8 ⇒ 对照组主力 ⇒ 先升实验组）。
+- **两阶段脚本**沿用：`/tmp/upg-fetch-222.sh`（只下载 + `ppp --help | grep Version` 校验）→
+  `/tmp/upg-swap.sh <服务名> <目录>`（备份 → stop → 换 → start → 查版本与 `is-active`）。
+  ⚠️ 脚本里 `exec >> /tmp/upg-swap.log` 会把 stdout 全吞掉，**ssh 那侧别再 `>/dev/null`**，否则看不到失败原因。
+- ⚠️ **the LAN host 到 github.com:443 会超时**（本次 v2.2.22 就是 `curl: (28)`），the VPS 正常 ⇒
+  **the LAN host 的包经本机中转**：`scp root@the VPS:/tmp/ppp2222.zip /tmp/` → `scp /tmp/ppp2222.zip root@the address:/tmp/`，
+  两端 `sha256sum` 对上再解包（本次 dfa7257c…）。
+- 资产名仍是判据：`openppp2-linux-amd64.zip`（**无后缀的标准版**）。
+- ⛔ **测速源站端口已经改成 the port**（`the local path the local path the port`），
+  旧记录里的 **9092 已作废**（打 9092 是 exit=7 连接被拒，不是源站）。文件：`test{1,10,20,100}mb.bin`、`test1gb.bin`。
+
+### 并发阶梯复测（the LAN host 本机多并发聚合，别从 Mac 测）
+
+脚本 `/tmp/ladder-222.sh <端口…>`：每个端口 1/2/4/8 并发各拉一个 the size，汇总 `speed_download`。
+源站 `http://the address:the port/test100mb.bin`（**必须 IPv4 字面量**）。
+
+**A/B 对照（同一台 the VPS、同一路径、只改 `mux.tx.flow.max_bytes`）**：
+
+| 并发 | 配额 1 MiB（复现旧行为） | 配额自动（跟随窗口） |
+|---|---|---|
+| 1 | **the measured rate** | **N ~ the measured rate** |
+| 2 | **the measured rate** | **N ~ the measured rate** |
+| 4 | the measured rate | N ~ the measured rate |
+| 8 | the measured rate | N ~ the measured rate |
+
+⇒ **低并发档差距最明显**（单流 2~4 倍），高并发档被路径盖住。
+更硬的一条证据：**配额压回 1 MiB 时 `throttled=49`、`overflow=0`、`reset=0`** ⇒
+新二进制**一条流都没杀**（旧二进制会杀掉这 49 条）。**背压这条路是真的。**
+
+**失败率**：the port 实验组 15/15 干净；the port 对照组 30 条里 1~3 条 `exit=28`（偶发，见下）。
+旧的 v2.2.21 是「6 条并发全部 exit=28、速率 N~the measured rate」⇒ **崩塌消失**。
+
+**天花板现在在哪**（都不是队列）：
+
+- the VPS 只有 **1 vCPU / the size**；传输时 `top` 显示 ppp 进程 ~N%、系统仍有 ~N% idle ⇒ **CPU 不是瓶颈**。
+- **the LAN host 直连源站（不经隧道）只有 the measured rate（单流）/ the measured rate（4 并发）** ⇒ 公网路径本身在 the measured rate 量级波动，
+  隧道聚合 250~the measured rate 已经**高于**直连 IPv4 路径。
+- ⇒ 剩下的上限是**路径**，不是每流队列。想再往上走要动的是载波/路径，不是队列。
+
+### 残留问题（未修，留档）
+
+- **偶发 exit=28（只在对照组 the port 出现过）**：载波停顿 ⇒ 发送端队列涨到**硬上限（2×配额 = 16 MiB）** ⇒
+  `fail_flow()` ⇒ 客户端看成超时。`mux.tx.flow.overflow` 与 `mux.rx.flow.reset` 同步 +1。
+  是**路径停顿的后果**，不是队列太小（旧上限 1 MiB 时这个窗口只有 1 MiB，所以旧版几乎必杀）。
+  想彻底避免：把 the VPS 的 `mux.flow.reorder.bytes` 调到 40 MiB（与 the LAN host 对齐 ⇒ 硬上限 the size），
+  但 **the VPS 只有 the size 内存**，12 条流全堵 ⇒ the size 队列 ⇒ **先算内存再动**。
+- **会话重启后服务端残留旧流表**：客户端重启 ⇒ 服务端 `mux.rx.flow.refused` / `unknown_cid` ⇒ 首条流 exit=7/28。
+  升级后第一轮测试最容易撞上，**等几分钟再测**（本次复测就干净了）。
+
+### 本轮新增的可用杠杆
+
+- `mux.tx.flow.max_bytes`（**整数，0 = 自动**，范围 [1 MiB, 64 MiB]）⇒ 现网可**在线做 A/B**：
+  设 1048576 即复现 v2.2.21 的行为，改回 0 即恢复。改完要重启对应服务才生效。
+- 统计里新增 `mux.tx.flow.throttled` ⇒ **节流次数**是判断「队列在起作用」的实时信号。
+
+### fuzz CI 变红的真实原因（上一节「踩到的坑」要更正）
+
+上一节写「重建前先 `stop()` 旧 context，否则 strand 上排队的 lambda 持有 `self`，旧会话不会立刻释放」——
+**这条不够**。真正的原因是：**会话没有关就被丢掉**，而会话与它的流互相持有（session→skt→session），
+这个环只有**收尾路径**会打破（`finalize()` 清流表）⇒ 旧会话、它的 strand、它的 context 一直活到进程退出，
+CI 的 LeakSanitizer 报「23 个分配 / 8083 字节不可达」。
+
+正解（提交 `5a43040b`）：
+
+- fuzz 目标 `Rebuild()` 前先 `close_exec()`（收尾）→ `context->restart()` + `poll()`（让 strand 把收尾跑掉）→ 再丢句柄；
+  跑 strand 顺带把覆盖率从 122 边提到 **138 边**。
+- 收尾后用 `weak_ptr` 断言会话**确实没了**（`vmux_receive_semantics_test` 的 `TestClosedSessionIsReleased`）。
+- 只抑制 **libFuzzer 自己的 RSS 看门狗线程**（`tests/fuzz/lsan.supp`，`leak:StartRssThread`）——
+  它从不 join，退出时状态还在；**目标自己的泄漏仍然会红**。
+- 本机复现口径：macOS 用 Homebrew LLVM，`ASAN_OPTIONS=detect_leaks=1` 才会真查；
+  ubuntu CI 用 clang 自带 libFuzzer，泄漏判定以 CI 为准。
+
