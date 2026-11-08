@@ -3397,6 +3397,32 @@ if (fx.queue.size() >= tx_flow_max_frames_ ||    // 帧数：用「软」配额
 ⇒ **教训**：把上限提到 16 MiB 后**必须重新看计数**，不能只看吞吐——吞吐被路径波动掩盖，
 计数不会。
 
+### ⚠️ fuzz harness 的断言：别自己发明判据
+
+v2.2.22 之后给 fuzz harness 加过一个断言：「会话收尾后必须被释放」，否则 abort。
+它在 v2.2.24 的 CI 上炸了——但**那个断言的前提是错的**：
+
+- 会话持有**自己的 strand**（`strand_` 成员），strand 的队列里可能还有这个会话的流的 handler；
+- 链是 `流 → 会话 → strand → 队列 → handler → 流`，**合法地**让会话活到 strand 被释放为止。
+- ⇒ 「会话必须消失」不是它该保证的事；**「会话岛不能变成不可达的垃圾」才是**——而那正是
+  LeakSanitizer 在退出时查的东西（也是当初发现这个泄漏的机制）。
+
+⇒ harness 改成：收尾照做（让收尾路径跑、容器清空），**由 leak 检测器裁决**。
+本地复现要点：
+
+```
+ASAN_OPTIONS=quarantine_size_mb=128:detect_leaks=1 \
+LSAN_OPTIONS="suppressions=$(pwd)/tests/fuzz/lsan.supp" \
+./bin/fuzz_vmux_frame -dict=tests/fuzz/dictionary/vmux.dict \
+  -artifact_prefix=/tmp/fz-crash/ -max_total_time=90 /tmp/fz-seed
+```
+
+⇒ **两向验证**：保留 close → 干净；去掉 close → LSan 立刻报出会话的分配点。
+（断言能抓住问题，但要用**对的判据**。）
+
+⇒ CI 里 504 是 GitHub CDN 抖动（下载 gradle / xtcp 源码 / release 资产都会中招），
+**与代码无关**，直接 rerun 即可——别把它当回归去查。
+
 ### ⚠️ 发送端 vs 接收端（现网最易搞错的一点）
 
 - bulk 数据由 **the VPS 流向 the LAN host**（the LAN host 的代理从 the VPS 源站拉文件）⇒ **发送端是 the VPS**。
@@ -3455,7 +3481,31 @@ CI 的 LeakSanitizer 报「23 个分配 / 8083 字节不可达」。
 - 本机复现口径：macOS 用 Homebrew LLVM，`ASAN_OPTIONS=detect_leaks=1` 才会真查；
   ubuntu CI 用 clang 自带 libFuzzer，泄漏判定以 CI 为准。
 
-### mux 提交整理（2026-11-08，`tidy/mux-consolidation` 分支）
+### 对外文档的写法（2026-11-08 起）
+
+`docs/`、`README`、**release notes** 这些是公开的，写的时候：
+
+- **不写主机名、端口、IP、部署拓扑**（the VPS / the LAN host / `:the port` / `:the port` / `the address` 之类）。
+- **不写现场测量的具体数字**（现网 RTT、内存、RSS 峰值、吞吐表格）——这些属于内部运维信息。
+- **只说「修复了什么」**：根因分析、行为保证、配置项含义、不变量，这些是产品知识，应该写。
+- 需要举例子时用**通用措辞**（「发送端」「接收端」「8 条流同时满载时」），不给具体部署标识。
+
+⇒ 内部运维细节（主机、端口、现网数值、排查手法）放 **`~/.agents/skills/openppp2/SKILL.md`**
+（内部手册），不要混进公开仓库。
+
+⇒ 审计报告（`docs/vmux/VMUX_AUDIT_REPORT.md`）是公开的：第十五节原本写着
+「四端（the VPS `:the port` / `:the port`，the LAN host `:the port` / `:the port`）」「源站 `the address:the port`」
+「RTT 实测 the measured delay」「the VPS 只有 1 vCPU / the size」和两张现场吞吐表 —— 已全部改写成
+「修复了什么 + 三条约束求交 + 发送端/接收端的区别」。
+
+### 版本号约定（2026-11-08 起）
+
+- **从 v2.3.0 起**，版本号按 **minor 递增**：v2.3.0 → v2.3.1 → … → v2.3.9 → v2.4.0。
+- **每个 minor 留约 10 个 patch**（vN.x 共 10 个），用完就升 minor。
+- ⇒ 不要再为「一次改动」升一个 minor；同一 minor 内的修复全部走 patch。
+- **历史上 N.x 有 22 个 patch**（2.2.0~2.2.22），太碎 ⇒ 从 2.3.0 改节奏。
+
+### mux 提交整理（2026-11-08，dev 直接 force push 整理后的历史）
 
 `087ce2c4` 之后的 28 个提交按主题压成 **15 个**，分支 `tidy/mux-consolidation`，
 **`dev` 与已发布的 v2.2.19~v2.2.22 四个 tag 全部不动**。
@@ -3479,4 +3529,24 @@ CI 的 LeakSanitizer 报「23 个分配 / 8083 字节不可达」。
 - **rebase 前先记下当前 HEAD**（`git reflog`），rebase 出错可以 `git reset --hard` 回去。
   一次误用 `--onto` 曾把 10 个提交删掉，靠 reflog 找回。
 - 提交标题用 `reword` + `GIT_EDITOR` 脚本改（直接 `git commit --amend` 只能改最新的那个）。
+
+⇒ **最终做法（2026-11-08 实战）**：rebase 合并在这个仓库代价太高（`vmux_net.cpp` 等
+被 6 个提交改、每个都往同一处加计数器），**重排必冲突**，而且「取一边」的解法会
+**静默丢掉另一边的内容**（实测丢过配额判定与它的回归测试）。
+
+**可靠做法：按主题逐组构造提交**（脚本化，零冲突）：
+
+1. 保留一份「内容正确」的源分支（不改历史，只改提交归属）。
+2. `git checkout --orphan <新分支> <基点>` 起一条空历史。
+3. 每组：`git show <组末提交>:<文件>` 把该组涉及的文件写成那个时刻的内容 → `git add` → `git commit`。
+4. 文件的**最终归属**以源分支的最终树为准（重命名的旧路径要一并删掉）。
+5. 组的顺序按「组末提交的时间」递增 ⇒ 文件状态单调前进 ⇒ 最终树必然正确。
+6. 末尾单独一个 bump 提交（版本文件不与其它组交叉）。
+
+⚠️ 坑：`--orphan` 到**已存在**的分支名会失败而脚本忽略返回码 ⇒ 每轮提交叠加。
+用唯一分支名 + 校验 `checkout`/`reset` 的返回码。
+⚠️ 坑：`git clean -fd` 会删掉**未被跟踪但需要保留**的文件（AGENTS.md 就是这种）。
+清之前先 `git checkout <分支> -- <路径>` 恢复被误删的跟踪文件。
+⚠️ 坑：`git show --name-only` 对**重命名**只给新路径 ⇒ 旧路径不会被删 ⇒ 文件在两处同时存在。
+要用 `--name-status` 解析 `R` 行的两端。
 
