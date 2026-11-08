@@ -3697,3 +3697,22 @@ BREAKING CHANGE 段自相矛盾：一处说「恢复」了 `schedulable()` 谓�
 - `mux.tx.backlog.stall` 涨 = 队列真的卡死、会话被重建（比 `overflow` 严重得多）。
 - 阶梯每档都要 **0 失败、0 截断、字节数完整**；只看 Mbps 会掩盖「跑得快但被掐断」。
 - 两组端口要一致；不一致先查两端配置差异，再查路径。
+
+### ⚠️ 跨组比吞吐前，先确认发送端调度器一致（2026-11-08 踩到）
+
+**TX 调度器取自发送端本端配置**，不是协商出来的：
+`AppConfiguration::GetEffectiveMuxMode()` → `vmux_net::mode_` →
+`process_tx_all_packets()` 按 `mux_mode_stripe` / `mux_mode_balance` / `mux_mode_flow` 分派。
+`stripe` 与 `balance` 都要求 flow-v2 序（`mode_requires_flow_v2()`），所以**序相同 ≠ 调度相同**。
+
+现网当时就是：slot1 发送端 `mux.mode=stripe`、slot2 发送端 `mux.mode=balance`，
+而 bulk 数据的发送端正是服务端 ⇒ **两组的速率差要归因到调度器，不能算到配额头上**。
+
+=> **跨窗口对比必须同组比同组**（the port 对 the port、the port 对 the port）；
+   跨组比吞吐只在发送端调度器一致时才有意义。
+=> 快照脚本现在带本端配置（`cfg_mode` / `cfg_turbo` / `cfg_reorder_bytes` / `cfg_tx_max_bytes` /
+   `cfg_rtx_flow_bytes`），报告时把 cfg 列出来，差异在哪儿一眼可见。
+=> 服务端 stats **不发布** `effective_mux_mode` / `mux_receiver_ordering`（客户端才发），
+   所以发送端的调度器只能从**配置**或 console 日志拿，不要指望 stats 字段。
+=> 「配额 X 比配额 Y 好」的结论，必须在**同一组、只改配额**的前提下测；
+   换了组的调度器，那个结论就不成立。
