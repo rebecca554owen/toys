@@ -3356,8 +3356,7 @@ v2.2.22 的修法（提交 `df4ff9b4`）：
 - **偶发 exit=28（只在对照组 the port 出现过）**：载波停顿 ⇒ 发送端队列涨到**硬上限（2×配额 = 16 MiB）** ⇒
   `fail_flow()` ⇒ 客户端看成超时。`mux.tx.flow.overflow` 与 `mux.rx.flow.reset` 同步 +1。
   是**路径停顿的后果**，不是队列太小（旧上限 1 MiB 时这个窗口只有 1 MiB，所以旧版几乎必杀）。
-  想彻底避免：把 the VPS 的 `mux.flow.reorder.bytes` 调到 40 MiB（与 the LAN host 对齐 ⇒ 硬上限 the size），
-  但 **the VPS 只有 the size 内存**，12 条流全堵 ⇒ the size 队列 ⇒ **先算内存再动**。
+  想彻底避免：见下面「最优窗口 = 16 MiB」一节（三约束求交，不是抬到 40 MiB）。
 - **会话重启后服务端残留旧流表**：客户端重启 ⇒ 服务端 `mux.rx.flow.refused` / `unknown_cid` ⇒ 首条流 exit=7/28。
   升级后第一轮测试最容易撞上，**等几分钟再测**（本次复测就干净了）。
 
@@ -3366,6 +3365,58 @@ v2.2.22 的修法（提交 `df4ff9b4`）：
 - `mux.tx.flow.max_bytes`（**整数，0 = 自动**，范围 [1 MiB, 64 MiB]）⇒ 现网可**在线做 A/B**：
   设 1048576 即复现 v2.2.21 的行为，改回 0 即恢复。改完要重启对应服务才生效。
 - 统计里新增 `mux.tx.flow.throttled` ⇒ **节流次数**是判断「队列在起作用」的实时信号。
+
+### ⚠️ 背压在生产上其实没生效（v2.2.22 的真实缺陷，已在 dev 修）
+
+软限判定被关在**加速快路径**里，而快路径只在**有空闲载波**时才跑。
+所有载波都忙的那一刻（`tx_links_` 为空）——恰恰是路径拥塞时——走兜底路径，
+**配额从未被判定**，队列直接涨到硬上限然后 `fail_flow()` 杀流。
+生产计数的形状就是证据：`mux.tx.flow.throttled = 0`（背压一次没触发）
+而 `mux.tx.flow.overflow = 6` / `mux.rx.flow.reset = 6`（一一对应的杀流）。
+
+⇒ **看计数就能判断背压有没有在工作**：`throttled=0` + `overflow>0` = 背压没生效，
+不是路径问题。（修法：配额判定提到分支之前，两条路径共用；新增用例钉住兜底路径。）
+
+### ⚠️ 发送端 vs 接收端（现网最易搞错的一点）
+
+- bulk 数据由 **the VPS 流向 the LAN host**（the LAN host 的代理从 the VPS 源站拉文件）⇒ **发送端是 the VPS**。
+- the VPS 两实例都**没配** `mux.flow.reorder.bytes` ⇒ 有效配额是**代码默认的 8 MiB**，
+  **不是** the LAN host 配的 40 MiB。
+- the LAN host 的 `mux.flow.reorder.bytes = 40 MiB` 管的是**接收**缓冲（flow v2 每连接重排缓冲），那个值是对的。
+- ⇒ 调吞吐要动 **the VPS 的 `mux.tx.flow.max_bytes`**；the LAN host 那边不动。
+
+### 最优窗口 = 16 MiB（四端 `mux.tx.flow.max_bytes = 16777216`）
+
+| 约束 | 值 |
+|---|---|
+| BDP @the measured rate（载波 RTT 实测 the measured delay） | the size |
+| BDP @the measured rate | the size |
+| D11 会话预算 @8 并发（the size/8） | 32 MiB |
+| the VPS 内存 @8 流 × 硬上限 2×（the size 可用） | the size |
+
+⇒ 交集取 **16 MiB**（32 MiB 在 12 并发时越过 D11 预算且内存偏紧）。
+
+现网扫描（改 the VPS 发送端，经 the port）：
+
+| 配额 | conc=1 | conc=4 | conc=8 | the VPS RSS 峰值 |
+|---|---|---|---|---|
+| 4 MiB | N | N | N | the size |
+| 8 MiB | N | N | N | the size |
+| **16 MiB** | **N** | N | N | the size |
+| 32 MiB | N | N | N | the size |
+
+⇒ **conc=4/8 无单调性**（路径决定）；**conc=1 才有趋势**，16 MiB 是拐点，
+32 MiB 只 +N% 且 conc=8 掉到 160（队列占用挤占其它流）。
+
+⇒ **路径漂移很大**（同一配置同一时刻可差 N 倍）⇒ 单次测量没有意义，
+**必须同刻交替 A/B**（3 轮交替，别先跑完一边再跑另一边）。
+
+### ⚠️ 测速源站端口又变了
+
+现在是 **the port**（`origin-cpp the local path the port`），旧记录的 9092 已作废
+（打 9092 是 exit=7 连接被拒，不是源站）。
+另外 **the LAN host 直连 the VPS 的 IPv4 路径本身很差**（RTT the measured delay + N% 丢包），
+**载波走的是 IPv6**（RTT the measured delay）—— 两者不是同一条路，别拿 IPv4 直连当路径基准。
 
 ### fuzz CI 变红的真实原因（上一节「踩到的坑」要更正）
 
@@ -3383,4 +3434,29 @@ CI 的 LeakSanitizer 报「23 个分配 / 8083 字节不可达」。
   它从不 join，退出时状态还在；**目标自己的泄漏仍然会红**。
 - 本机复现口径：macOS 用 Homebrew LLVM，`ASAN_OPTIONS=detect_leaks=1` 才会真查；
   ubuntu CI 用 clang 自带 libFuzzer，泄漏判定以 CI 为准。
+
+### mux 提交整理（2026-11-08，`tidy/mux-consolidation` 分支）
+
+`087ce2c4` 之后的 28 个提交按主题压成 **15 个**，分支 `tidy/mux-consolidation`，
+**`dev` 与已发布的 v2.2.19~v2.2.22 四个 tag 全部不动**。
+
+整理规则：
+
+- **加后即撤的整组丢弃**：每载波 RTT 观测（`b7c4dfb8` 加、`351214ca` 撤）净额只剩一个断言，
+  RTT 观测本身丢弃，**那个「计数器登记表 ↔ 发布键集合锁步」的断言单独保留成一个小提交**。
+- **同主题合并**：三个上游测试提交 → 一个；四个文档提交 → 一个；fuzz 目标 + fuzz 泄漏修复 → 一个；
+  三个配额相关提交（DoS 边界 + 配额跟随窗口 + 背压修复）→ 一个。
+- **中间版本 bump 丢弃**（2.2.19/2.2.20/2.2.21），保留 2.2.18 与 2.2.22。
+- **验收标准是树等价**：`git diff dev tidy/mux-consolidation` 必须为空。
+
+⚠️ **重写手法上的坑**：
+
+- **摘取提交会连环冲突**（这些 mux 提交互相依赖上下文）。
+  **保持原顺序**逐个 cherry-pick 几乎不冲突；一旦重排顺序就冲突。
+- 文档类冲突可安全取「我们的」版本（审计报告由后面的文档提交统一补齐）。
+- 单文件主题（文档、计数器测试）直接用 `git checkout <最终提交> -- <文件>` 取最终版本，最省事。
+- `git rebase -i` 的 `fixup` 用 **python 脚本**当 `GIT_SEQUENCE_EDITOR`（macOS 的 `sed -i` 参数不同会报错）。
+- **rebase 前先记下当前 HEAD**（`git reflog`），rebase 出错可以 `git reset --hard` 回去。
+  一次误用 `--onto` 曾把 10 个提交删掉，靠 reflog 找回。
+- 提交标题用 `reword` + `GIT_EDITOR` 脚本改（直接 `git commit --amend` 只能改最新的那个）。
 
