@@ -3781,7 +3781,35 @@ the LAN host↔the VPS 的 **IPv6 RTT the measured delay、带宽 the measured r
    IPv4 上的 the measured delay / N% 丢包是 **IPv4 路径的问题**，不是这条线路的固有问题。
 ⇒ 测量脚本的直连基线应该改成走 IPv6（与隧道同路径），否则基线没有可比性。
 
+### YouTube「Connection Speed」不是带宽测速（2026-11-09 查清）
+
+YouTube 播放器右下角那个 `Connection Speed` **不是 speedtest**：
+- `speedtest.youtube.com` 解析到 `2001::1`（RFC 4380 保留地址）⇒ **没有真实测速端点**。
+- 那个数字是 Google 按**当前视频档位的码率需求** + 实际取流表现给出的**估算值**，
+  **封顶在视频码率上**，线路再快也不会更高。
+  ⇒ the measured rate ≈ 1080p 高码率档的量级，**不是**线路上限。
+
+现网实测（2026-11-09）：
+
+| 测量 | 结果 |
+|---|---|
+| the LAN host → youtube.com **直连** | **http=N 超时 Ns**（IPv4 `the address` 超时；IPv6 `N::1` 黑洞） |
+| the LAN host → youtube.com **走隧道 the port** | **http=N，Ns** |
+| the LAN host → 隧道 → the VPS 源站 the size | **N / the measured rate**（the port / the port） |
+| the VPS → Google 单连接 | **the measured rate** |
+| the VPS → Hetzner 单连接 | **the measured rate** |
+| the VPS → Google/Hetzner 4 连接 | **the measured rate** |
+
+⇒ **the LAN host 直连 YouTube 不通，隧道是唯一通路**。
+⇒ **KCC 已在跑**（二进制含 `cc_kcc.cpp` 全套符号，运行时 `--tcp-stack=xtcp` 无降级）；
+   BBR（`cc_bbrv1.cpp`）也编入。XTCP 是用户态栈，不依赖内核 CC。
+⇒ **mux 不是瓶颈**：隧道内层 745–the measured rate，远超 YouTube 播放需求。
+⇒ 真正的天花板是 **the VPS 出网 135–the measured rate**，且**单连接只有 135–the measured rate**、
+   4 连接才 the measured rate ⇒ **单 TCP 流被 RTT/丢包限住**，多连接能翻倍。
+   想提升 YouTube 体验，该优化的是 **the VPS → Google 的出口路径**，不是 mux 的 CC。
+
 ### ⚠️ 两个工具/口径陷阱（都踩过）
+
 
 1. **直连基线与隧道走同一条线路，但走的是不同 IP 族**：
    源站就在 the VPS 本机上，所以两者都是 the LAN host→the VPS；但基线脚本用 IPv4、隧道用 IPv6，
