@@ -3751,12 +3751,43 @@ slot2 = balance（竞争法 + 每流定序，生产主力，见「生产主力�
   日志 stall / flow reset / rtx exhausted **全部为 0** ⇒ 没有任何流被杀。
 - **1G 单流三窗口全部完整传完** ⇒ 历史上「大文件单条传输被掐断」在 v2.3.0 上不再复现。
 
+### ⚠️ 源站就是 the VPS 本机 —— 直连与隧道走的是同一条线路
+
+源站 `the address:the port` **就是 the VPS 这台机器的公网 IP**（`hostname -I` 已确认，
+`ip route get` 显示 local 路由）。所以：
+
+- 直连基线 = the LAN host → the VPS（公网）
+- 隧道 = the LAN host → the VPS（公网）→ 回到 the VPS 本机的源站
+  ⇒ **两者走的是同一条 the LAN host↔the VPS 线路**，不是两条路。
+  ⇒ 隧道比直连快，说明**瓶颈在 the LAN host↔the VPS 这条线路 + 协议栈**，不在隧道封装本身。
+  ⇒ 「直连基线」可以当作**这条线路的裸上限参考**，隧道值超过它就说明隧道在复用/优化同一条路径。
+
+实测（2026-11-09 14:xx，the LAN host 本机发起）：
+
+| 方式 | 单流 | 4 流 | 备注 |
+|---|---|---|---|
+| 直连 IPv4 | the measured rate | the measured rate | RTT the measured delay |
+| 直连 IPv6 | **the measured rate** | **the measured rate** | **RTT the measured delay** |
+| 隧道 conc=1 | N（the port）/ N（the port） | — | 走 IPv6 |
+| 隧道 conc=4 | N（the port）/ N（the port） | — | 走 IPv6 |
+
+⚠️ **IPv4 和 IPv6 是两条质量完全不同的路径**：
+the LAN host↔the VPS 的 **IPv6 RTT the measured delay、带宽 the measured rate**；**IPv4 RTT the measured delay、带宽 the measured rate**。
+隧道客户端配的是 IPv6 地址（`ppp://[2403:...]:the port/`），所以隧道走的是好路径。
+而 `mux-measure.sh` 的直连基线走 **IPv4** ⇒ **基线一直在给一条更差的路径做参照**。
+
+⇒ 之前所有「晚高峰劣化」「窗口差异」的判定，基线都建在 IPv4 上；
+   **「线路不好」这个判断需要重新审视** —— IPv6 上线路本身可以跑到 the measured rate，
+   IPv4 上的 the measured delay / N% 丢包是 **IPv4 路径的问题**，不是这条线路的固有问题。
+⇒ 测量脚本的直连基线应该改成走 IPv6（与隧道同路径），否则基线没有可比性。
+
 ### ⚠️ 两个工具/口径陷阱（都踩过）
 
-1. **直连基线与隧道不是同一条路**：
-   直连基线是 the LAN host→源站；隧道是 the LAN host→the VPS→源站。
-   所以「隧道比直连快 8 倍」**不能**推出「隧道无额外损耗」，只能说明直连那条路更差。
-   直连基线只能当**路径健康指标**（有没有丢包/劣化），不是隧道吞吐的天花板对照。
+1. **直连基线与隧道走同一条线路，但走的是不同 IP 族**：
+   源站就在 the VPS 本机上，所以两者都是 the LAN host→the VPS；但基线脚本用 IPv4、隧道用 IPv6，
+   两条路径 RTT/带宽差一个量级（the measured delay/the measured rate vs the measured delay/the measured rate）。
+   ⇒ 基线要改成 IPv6 才与隧道可比；
+   ⇒ 「隧道比直连快」说明隧道在复用/优化同一条线路，**不**说明「隧道没有损耗」。
 2. **计数器只能用窗口内增量，不能跨窗口相减**：
    会话重建会把 `mux.link.*` / `mux.rx.flow.reset` 归零，跨窗口绝对值相减会得到假负值。
    `mux-compare.py` 已改成按**每个样本自己的 BEFORE→AFTER** 算增量（2026-11-09 修），
