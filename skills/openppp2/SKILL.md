@@ -3882,7 +3882,49 @@ YouTube 播放器右下角那个 `Connection Speed` **不是 speedtest**：
 `server.session.resume_rejected`，表现为 `phase=reconnecting` + `mode=compat` 降级 + `code=503`。
 **每次实验前必须 kill 全部 lab client 并重启 server。**
 
+### 隧道连接复用对起播 TTFB 的实测收益（2026-11-11 lab 验证）
+
+**结论：复用只省约 the measured delay（N%），救不了 YouTube 的 Ns。**
+
+**先厘清 Ns 的构成**：
+- the size range（超阈值）：**N–Ns**
+- 阈值内的 range：N–Ns
+- 明文小请求走隧道（无 TLS）：**N–Ns**（直连同目标 Ns）
+- 代理 CONNECT + TLS：额外 **N–Ns**
+
+=> **大 range 的 Ns 大头是 YouTube 侧限速，不是握手慢。**
+
+**lab 实验（the LAN host /opt/ppp-lab，netem 加 the measured delay 单向延迟模拟 RTT）**：
+
+| 组别 | TTFB min/med/max/avg |
+|---|---|
+| 复用一条代理连接（6 请求） | N / N / N / **Ns** |
+| 每次新建代理连接（6 请求） | N / N / N / **Ns** |
+
+**生产隧道（真实 RTT the measured delay）**：
+
+| 组别 | TTFB 均值 |
+|---|---|
+| 复用 | **Ns** |
+| 不复用 | **Ns** |
+
+**复用确实生效**（mux 计数器）：同一代理连接内 5 个请求，
+`mux.link.recv` 增量 37（**N 帧/请求**）vs 不复用 89（**N 帧/请求**）⇒ 省 N% 的帧。
+
+=> **该省的都省了，只是总量本来就小** —— 复用省的是**帧**，不是**往返**。
+
+⚠️ **测连接复用必须换 keep-alive 源站**：
+原 `origin-cpp` 固定返回 `Connection: close`，复用根本不可能生效；
+lab 里改用 `python3 http.server`（`protocol_version="HTTP/N"`）。
+
+⚠️ **lab 回环测不出往返收益** ⇒ 必须 `tc qdisc add dev lo root netem delay the measured delay`
+人工加延迟，测完 `tc qdisc del dev lo root` 撤销。
+
+=> **真正能改善 YouTube 的是「保住高清晰度档位」（配额 = 码率 × 2）**
+   与「换更快的出口路径」，不是连接复用，也不是调 `--tun-mux`。
+
 ### ⚠️ 两个工具/口径陷阱（都踩过）
+
 
 
 
