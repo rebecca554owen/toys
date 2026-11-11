@@ -3847,7 +3847,43 @@ YouTube 播放器右下角那个 `Connection Speed` **不是 speedtest**：
 ⚠️ **URL 的 `ip=` 参数绑定出口 IP**：the LAN host 直连签发的 URL 在 the VPS 上无效（反之亦然），
 隧道测试必须在 the LAN host 侧用 `-x http://127.0.0.1:the port` 且加 `-L` 跟随重定向。
 
+### `--tun-mux` 不是载波数（2026-11-11 实测）
+
+`--tun-mux=N` 是**协商基线 base**，不是最终载波数：
+- client 侧（`VEthernetExchanger.cpp:2412`）：**只有 flow 模式 + `mux.turbo=true`**
+  才把上限抬到 `base x PPP_MUX_TURBO_FACTOR_MAX`（3）。
+- server 侧（`VirtualEthernetExchanger.cpp:1410`）：**只要 flow 模式**就抬到 `base x 3`
+  （server 拿不到 client 的 turbo 标志）。
+- turbo 控制器（`vmux_net.cpp:4765`）在 `grow_ready` 时持续涨到 `target = base x factor`。
+
+=> 想真正限制载波数，只能 **关 `mux.turbo`**。
+
+**lab 实测（flow 模式，the LAN host 回环）：**
+
+| --tun-mux | 实际 links | TTFB(the size x8) min/med/avg | the size |
+|---|---|---|---|
+| 2 | 2 | N / N / N | the measured rate |
+| 4 | 2 | N / N / N | the measured rate |
+| N | N | N / N / N | the measured rate |
+
+=> **载波数从 2 到 12，起播延迟无可测量差异（都在 N–Ns）。**
+
+**为什么（时序分解，生产隧道）：**
+- mux 流建立（明文目标 TTFB 走隧道）：**N–Ns**
+- the LAN host 直连同目标无隧道：**Ns**
+- 代理 CONNECT + TLS 握手（额外）：**N–Ns**
+
+=> mux 复用已建立的载波，新流只走 N 个 RTT 的 SYN/ACK，**不随载波池大小变化**。
+=> 那 Ns 主要来自 **TLS 握手 + 大 range**，与载波数无关。
+
+=> **想改善 YouTube 起播，方向是「连接复用 / 减少 TLS 往返」，不是调 `--tun-mux`。**
+
+⚠️ **lab 实验的坑**：多个 client 用同一 GUID 连同一 lab server 会互相触发
+`server.session.resume_rejected`，表现为 `phase=reconnecting` + `mode=compat` 降级 + `code=503`。
+**每次实验前必须 kill 全部 lab client 并重启 server。**
+
 ### ⚠️ 两个工具/口径陷阱（都踩过）
+
 
 
 
