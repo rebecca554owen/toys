@@ -3808,7 +3808,47 @@ YouTube 播放器右下角那个 `Connection Speed` **不是 speedtest**：
    4 连接才 the measured rate ⇒ **单 TCP 流被 RTT/丢包限住**，多连接能翻倍。
    想提升 YouTube 体验，该优化的是 **the VPS → Google 的出口路径**，不是 mux 的 CC。
 
+### YouTube 限速机制：已实测确认（2026-11-11，非高峰）
+
+用户提出的机制假设**方向正确**，但有三处必须修正。
+
+**1. 阈值真实存在且可精确定位：11,834,240 字节（the size）。**
+同一 DASH URL（itag=299）逐档测 range：11,the size → the measured rate；11,the size → the measured rate。
+两档 **TTFB 相同（Ns）** ⇒ 是**传输中途**被压速，不是排队。
+
+**2. 限速速率不是固定 the measured rate，而是「平均码率 x 2」。** 逐条验证：
+720p N→N、1080p N→N、1080p N→N、1440p N→N、
+4K N→N、4K N→the measured rate —— **全部精确 2x**。
+
+**3. 「HLS 不受影响」不成立：`sq` 参数不改变限速**（sq=0/1/2 都是约 the measured rate）。
+限速绑定的是**单次 HTTP 响应体大小**。HLS 体感正常是因为**每段只有几 MB**，
+天然落在阈值以下 —— 受益的是「段小」，不是「HLS 协议」。
+
+**4. 还有每 URL 的累计配额**：同一 URL 连续 the size range，
+前 3 段（累计 the size）都很快，**第 4 段（累计 the size）起降到约 the measured rate**。
+播放器切清晰度换 URL 后恢复 —— 这解释了「掉分辨率后又能起播」。
+
+**5. 隧道内外限速完全一致** ⇒ 限速是 YouTube 侧的，mux 无辜：
+
+| range | the VPS 直连 | the LAN host 经隧道 |
+|---|---|---|
+| the size（阈值内） | the measured rate（ttfb Ns） | the measured rate（ttfb **Ns**） |
+| the size（超阈值） | the measured rate | **the measured rate** |
+
+**6. 隧道的真实代价是约 Ns 固定 TTFB，不是带宽**：
+各档 TTFB 恒定 N–Ns（the size / the size / the size / the size 都一样），
+速度随请求大小线性增长 ⇒ 小请求延迟主导，大流量不受影响。
+
+**可操作推论**：the measured rate 是「当前档位码率 x 2」的天花板。
+4K60 AV1（the measured rate）配额 the measured rate 够用；一旦降到 1080p（the measured rate），
+配额只剩 the measured rate ⇒ **掉分辨率后卡顿是配额机制的必然结果，不是线路问题**。
+唯一值得优化的 mux 侧点是**减少 mux 流建立往返 / 连接复用**（影响起播与切清晰度）。
+
+⚠️ **URL 的 `ip=` 参数绑定出口 IP**：the LAN host 直连签发的 URL 在 the VPS 上无效（反之亦然），
+隧道测试必须在 the LAN host 侧用 `-x http://127.0.0.1:the port` 且加 `-L` 跟随重定向。
+
 ### ⚠️ 两个工具/口径陷阱（都踩过）
+
 
 
 1. **直连基线与隧道走同一条线路，但走的是不同 IP 族**：
