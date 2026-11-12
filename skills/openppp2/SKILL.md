@@ -3923,7 +3923,45 @@ lab 里改用 `python3 http.server`（`protocol_version="HTTP/N"`）。
 => **真正能改善 YouTube 的是「保住高清晰度档位」（配额 = 码率 × 2）**
    与「换更快的出口路径」，不是连接复用，也不是调 `--tun-mux`。
 
+### 非高峰复核：the measured rate 是隧道实到速率，且隧道只有线路的 31–N%（2026-11-12）
+
+用户截图（非高峰，4K60 AV1）：**Connection Speed = the measured rate = the measured rate**，Buffer Health Ns，0 dropped。
+
+**实测能复现**：隧道内拉 the size 响应 = **the measured rate**（the size = the measured rate）
+⇒ 截图就是**隧道内的实到速率**，不是播放速率估算。
+
+⚠️ **更正昨天的「配额 = 码率 x 2」模型**：那是 **curl 单次大 range** 的行为；
+真实播放器用**小分段 + 多连接**，不会触发 the size 单响应限制。
+
+**the VPS 出网现在极充足**（同一时刻实测）：
+
+| 测项 | 结果 |
+|---|---|
+| the VPS -> Google 单连接 | **the measured rate** |
+| the VPS -> Google 4 连接 | **the measured rate** |
+| the VPS -> YouTube 播放器式（the size x 4conn） | **the measured rate** |
+| the VPS -> YouTube 4 连接 | **the measured rate** |
+
+⇒ **线路完全不是瓶颈**（昨天测到的 135–the measured rate 是当时窗口状态，已大幅好转）。
+
+**但发现真问题：mux 隧道只有线路的 31–N%**
+
+同时刻、同一 the LAN host<->the VPS 线路（源站在 the VPS 本机，只差一层隧道），5 轮中位数：
+
+| 并发 | 直连 IPv6 | 经 mux 隧道 | 隧道保留 |
+|---|---|---|---|
+| 1 | **the measured rate** | **the measured rate** | **N%** |
+| 4 | **the measured rate** | **the measured rate** | **N%** |
+
+- 不是 CPU 瓶颈（测隧道时 the LAN host N% idle，ppp 进程 CPU 6–N%）。
+- 隧道内**每请求约 Ns 固定开销**：the size→the measured rate、the size→the measured rate、the size→the measured rate、the size→the measured rate
+  （耗时 ≈ Ns 固定 + 字节/带宽）⇒ **小分段请求被固定开销主导，这是起播慢的直接原因**。
+
+=> **下一步该优化 mux 隧道效率（31–N%）与每请求 Ns 固定开销**，
+   而不是继续折腾线路或 YouTube 侧。
+
 ### ⚠️ 两个工具/口径陷阱（都踩过）
+
 
 
 
