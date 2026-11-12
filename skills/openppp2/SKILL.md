@@ -4113,7 +4113,36 @@ flow ≡ 一条到目标的 TCP，而 **TLS 是 the LAN host<->目标 端到端*
 ⚠️ **会话重建期间对应 slot 的 carrier 短暂为 0**，那段时间走该 slot 的流量会失败 ——
 排查「偶发 502/连不上」时要看这个时间窗。
 
+### YouTube Connection Speed 的真正原因：不是线路，是 ABR 被小分段误导（2026-11-13）
+
+**结论：线路和 mux 都没问题（同路径实测 256–the measured rate），
+是 YouTube 的 ABR 用「被小分段 + 固定开销压低的取流速率」判断带宽，误判成不足 ⇒ 主动降档。**
+
+**路径事实**：the LAN host→the VPS IPv6 **the measured delay / N% 丢包**，carrier 26 条，隧道全通。
+
+**mux 隧道是稳的**：分小时 link close/open —— 20 时 0/0、21 时 0/0、22 时 0/12、23 时 0/0；
+00 点的 168 次 close **全是压力测试造成的**（`record header read FAILED err=101`，
+载波传 the size 后被切断 ⇒ 会话重建）。
+
+**两条路径等效**（真实浏览器路径 SS vs 隧道，the size/the size/the size）：
+N/N/N vs N/N/the measured rate ⇒ 差异 ±N%，**mux 无额外损耗**。
+
+**分段大小决定有效速率**（隧道，5 轮中位）：
+the size→N、the size→N、the size→N、the size→N、the size→the measured rate（跨 64 倍）。
+**直连也同样慢**（真 Range 分块源站对比：the size 直连 N vs 隧道 the measured rate）⇒ 瓶颈不在隧道。
+每请求固定开销 **Ns ≈ N RTT**（the measured delay/个）。
+
+**用户截图自证**（1080p60 档）：Connection Speed the measured rate、Network Activity the size、
+Buffer Health **Ns**、0 dropped ⇒ **缓冲已经够，播放器只维持最低限度的取流**，
+the measured rate 是「维持缓冲的速率」不是「可用带宽」。
+**Current Res 2560x1440 vs Optimal 3840x2160** ⇒ YouTube **主动降档**，这才是模糊的根因，
+并形成「降档→码率需求降→缓冲久→更稳定」的自强化低清循环。
+
+=> **可优化点是「让 ABR 看到真实带宽」**：降低每请求固定开销（N RTT）、
+   或增大分段（the size 是 the size 的 64 倍）。**换更快出口没必要**（已 256–the measured rate，够 4K）。
+
 ### ⚠️ 两个工具/口径陷阱（都踩过）
+
 
 
 
