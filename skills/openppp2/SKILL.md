@@ -3996,7 +3996,47 @@ lab 里改用 `python3 http.server`（`protocol_version="HTTP/N"`）。
 
 ⚠️ **做「生产 mux=2」实验需改 systemd 参数并重启现网服务，未执行（等授权）。**
 
+### mux 会话 vs mux 流：CONNECT 在 mux 内，不会新建一堆 mux（2026-11-12）
+
+**必须区分两层：**
+
+| 层 | 是什么 | 数量 | 何时建立 |
+|---|---|---|---|
+| **mux 会话 / carrier** | the LAN host->the VPS 的底层 TCP 连接（= `--tun-mux`） | **N 条，恒定** | 建链时一次建好，**不随请求增长** |
+| **mux 流 / flow** | carrier 内承载一条到目标的逻辑连接 (cid) | 按需 | 每个到目标的 TCP 连接一条 |
+
+**实测（10 个请求前后）**：
+
+| 指标 | BEFORE | AFTER | delta |
+|---|---|---|---|
+| **carrier TCP 连接数 (->the VPS:the port)** | **N** | **N** | **0** |
+| mux.rx.flow.refused / unknown_cid / syn_ok.refused / closed_flow.drop | — | — | **全部 0** |
+| mux.link.send / link.recv | N / N | N / N | **+N / +N**（纯数据帧） |
+
+=> **看 YouTube 不会新建 mux 会话，也没有新建 flow，只有数据帧。**
+
+**那 Ns 的 mux 净开销从哪来**（同目标 gstatic 两条路径）：
+
+| 路径 | dns | conn | pre(CONNECT) | ttfb |
+|---|---|---|---|---|
+| the LAN host 直连 | N | N | **N** | N |
+| the LAN host 经 mux | N | N | **N** | N |
+
+=> mux 净开销 = **Ns（约 N RTT）**。
+
+**机制**：`vmux_skt.cpp:438` 客户端 `post(cmd_syn, host:port)` -> `vmux_net.cpp:1874`
+服务端 `process_rx_connecting` 去和目标建 TCP -> 回 `cmd_syn_ok`。
+客户端**等 cmd_syn_ok** 才能继续 = N 个 RTT（the measured delay）；
+服务端到目标的 TCP 建连与它并行，不额外加往返。
+
+=> **`--tun-mux` 控制载波池，不控制 flow 数 ⇒ 调小它省不了这个 RTT。**
+
+**能省这 Ns 的方向**：flow 复用（同 host:port 复用已建 flow，跳过 cmd_syn/cmd_syn_ok）、
+乐观建连（不等 cmd_syn_ok 先发数据）、TLS 会话恢复
+（但 TLS 是 the LAN host<->目标 端到端的，隧道只搬字节，**隧道侧不能代为优化**）。
+
 ### ⚠️ 两个工具/口径陷阱（都踩过）
+
 
 
 
