@@ -4078,7 +4078,38 @@ flow ≡ 一条到目标的 TCP，而 **TLS 是 the LAN host<->目标 端到端*
 
 => **优先查「SABR/UMP」与「flow 被拒」两条线**，比调 mux 数有价值得多。
 
+### `mux.rx.flow.refused` 的语义与判读规则（2026-11-12 代码核实 + 浏览器实测）
+
+`refuse_flow()`（`vmux_net.cpp:2212`）是**唯一**递增 `mux.rx.flow.refused` 的地方
+（`vmux_net.cpp:2218`），它**只做一件事**：回 `cmd_syn_ok` 带 'N'，
+告诉对端「这条 flow 我这边没有，别再重传」。
+
+| 触发点 | 位置 | 同增的计数器 | 含义 |
+|---|---|---|---|
+| A. 已关闭 flow 的重传帧超出 DSN 前沿 | `vmux_net.cpp:2413-N` | `mux.rx.closed_flow.drop` | 对端重传一条**已结束**的流 |
+| B. 完全未知的 cid | `vmux_net.cpp:2430` | 无 | 对端有这条流、我这边没有 |
+
+**判读规则（单看 flow.refused 增长没有意义）**：
+
+| 现象 | 含义 | 要不要管 |
+|---|---|---|
+| `flow.refused` 与 `closed_flow.drop` **同时 +1** | 对端重传已结束的流 | **不用管**（正常收尾） |
+| `flow.refused` 单独涨、`closed_flow.drop` 不动 | 触发点 B：flow 状态丢失 | **要查** |
+| `syn_ok.refused` 涨但 `refused` 不涨 | 服务端拒绝我们的建连 | **要查** |
+| `flow.reset` / `rtx.exhausted` 涨 | 真丢流 / 重传耗尽 | **要查** |
+
+**浏览器实测（in-app Browser + 真实点击播放，N 秒采样）**：
+`closed_flow` 与 `refused` **全程为 0**，carrier 恒定 12 条，
+`mux.rx.flow.reack` 从 6 涨到 196（正常重传确认）。
+⇒ 那次 `flow.refused = 1` 是 **slot2 会话重建**时的一次性收尾
+（16:26:02 一批 socket closed → 16:26:03–16:26:09 重开 10 条 link），
+不是稳态问题。
+
+⚠️ **会话重建期间对应 slot 的 carrier 短暂为 0**，那段时间走该 slot 的流量会失败 ——
+排查「偶发 502/连不上」时要看这个时间窗。
+
 ### ⚠️ 两个工具/口径陷阱（都踩过）
+
 
 
 
