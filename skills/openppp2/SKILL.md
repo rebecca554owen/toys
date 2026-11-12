@@ -4035,7 +4035,51 @@ lab 里改用 `python3 http.server`（`protocol_version="HTTP/N"`）。
 乐观建连（不等 cmd_syn_ok 先发数据）、TLS 会话恢复
 （但 TLS 是 the LAN host<->目标 端到端的，隧道只搬字节，**隧道侧不能代为优化**）。
 
+### flow 复用 vs Keep-Alive：Keep-Alive 已天然存在（2026-11-12 代码评估）
+
+**CONNECT 隧道模式（YouTube 走这个）= 一条 CONNECT = 一条 flow = 一条到目标的 TCP**，
+隧道内全程复用这条 flow（`VEthernetHttpProxyConnection.cpp:378` TunnelMode 分支纯字节 pipe）。
+⇒ **「Keep-Alive」在 mux 层的等价物已经免费有了，不需要实现。**
+
+**真正的浪费在普通 HTTP 代理模式（absolute-form）**：每个请求都调 `ConnectBridgeToPeer`
+（`VEthernetHttpProxyConnection.cpp:333`）→ 每请求一条新 flow。
+
+**HTTPS 下「让新连接复用旧 flow」架构上不可行**：
+`vmux_net.cpp:3662` `process_rx_connecting` 每条 flow 单独 `accept(host:port)` 建一条到目标的 TCP；
+`vmux_skt.h:173/178` 里 `connection_id_` 与 `tx_socket_` 绑定在同一个 `vmux_skt`。
+flow ≡ 一条到目标的 TCP，而 **TLS 是 the LAN host<->目标 端到端**的，服务端看不到 TLS 层，
+无法把两条 TLS 会话塞进同一条 TCP（除非 TLS 终结，那会破坏端到端加密）。
+
+| 方案 | 难度 | 收益 |
+|---|---|---|
+| A. 普通 HTTP 模式做目标连接池 | 中（~N–N 行） | 明文 HTTP 每请求省 1 RTT |
+| B. HTTPS 下复用旧 flow | **不可行** | — |
+| C. 乐观建连（不等 cmd_syn_ok） | 低–中 | 可能省 1 RTT（`vmux_skt.cpp:438` 已有雏形） |
+| D. 减少 `--tun-mux` | **无效** | 0 |
+
+### 浏览器实测（比 curl 直观）—— YouTube 现在用 SABR/UMP
+
+方法（可复用）：独立 Edge + `--proxy-server=http://the address:the port`（确实走 the LAN host 隧道）
++ `--remote-debugging-port` 用 CDP 读 `getStatsForNerds()`。
+
+**四个发现**：
+
+1. **`bandwidth_kbps` 是 SABR 预估值，不是实测速率**（`bandwidth_samples` 全同值、
+   `network_activity_bytes` 恒 `the size`）⇒ 不能当带宽实测用。
+2. **YouTube 现在用 SABR/UMP**（`debug_info` 含 `SABR`，响应 MIME `application/vnd.yt-ump`），
+   **不是传统 DASH range** ⇒ **基于 curl Range 的限速结论不能直接套到播放器上**。
+3. **一次播放会话建 43+ 条 flow 且大量被拒**（`closed_flow.drop +43`、`flow.refused +116`、
+   `syn_ok.refused +53`），而 **carrier 始终 13 条**。
+4. **播放器在反复建 flow 且被拒**：N 秒只走 ~190 帧（约 the size），远低于视频流需求。
+
+⚠️ **未拿到「持续播放 N 秒的实际取流速率」**：CDP 合成输入不算真实用户激活，
+播放卡在缓冲（`vt` 恒 0、`buffer_health` Ns、`res 0x0@60`）。
+且 **CDP Network 域看不到 UMP POST 的响应体**（SABR 服务端推流），字节数只能从 the LAN host mux 计数器读。
+
+=> **优先查「SABR/UMP」与「flow 被拒」两条线**，比调 mux 数有价值得多。
+
 ### ⚠️ 两个工具/口径陷阱（都踩过）
+
 
 
 
