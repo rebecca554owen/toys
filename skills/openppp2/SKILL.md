@@ -2021,7 +2021,12 @@ bash tools/check_vcxproj_sources.sh
   > 旧文档写「对照组用 IPv4」是过期信息，**别再按地址族给两组贴标签**——
   > 两组的区别只是端口（`:the port`/`:the port`）和代理端口（`the port`/`the port`）。
   > ⚠️ 测速 URL 里的 `the address` 是**隧道内取内容的源站地址**，不是隧道外层传输地址。
-- the LAN host 两套 systemd client 都使用 `--tun-host=no --tun-mux=10 --mux-mode=flow --tcp-stack=xtcp`。
+- the LAN host 两套 systemd client 都使用 `--tun-host=no --tun-mux=12 --mux-mode=flow --tcp-stack=xtcp`（2026-11-12 实查；tun-mux 已从 10 调到 12）。
+  **服务端（the VPS）的 `mux.mode` 是两组 A/B 的差异点**（客户端全用 `flow`，接收端排序由服务端决定）：
+  对照组 `ppp` = `"stripe"`、实验组 `ppp2` = `"balance"`（skill 结论的生产主力配置），
+  两组协商结果均为 `flow_v2`（`mux_receiver_ordering=flow_v2`）。turbo 两端均为 0。
+  ⚠️ 排查协商结果用 stats 的 `mux_receiver_ordering` 字段 —— **掉线时刻的快照会显示 compat + links=0（陈旧值）**，
+  以 `phase=connected` 且 `mux_active_links` 满编时的读数为准；重连风暴（`tcp connect failed error=109`）通常自愈。
   > 🚨 **参数名坑（2026-10-16 实测修正）**：the LAN host 两个单元文件曾一直带着改名前的旧参数
   > `--tun-tcpip=xtcp`（v2.1.15 起改名，见本文 248 行），**被新版二进制静默忽略 → 实际跑的是 native 栈**，
   > 后果：公网高并发小文件**大量失败**且吞吐显著降低（XTCP 修正后全部消失）。
