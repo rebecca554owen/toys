@@ -3960,7 +3960,44 @@ lab 里改用 `python3 http.server`（`protocol_version="HTTP/N"`）。
 => **下一步该优化 mux 隧道效率（31–N%）与每请求 Ns 固定开销**，
    而不是继续折腾线路或 YouTube 侧。
 
+### YouTube 路径定位：握手成本 = N 个 RTT，与 mux 数无关（2026-11-12）
+
+⚠️ **先记一个我自己踩的坑**：实验脚本把 `tc netem delay the measured delay` 留在 the LAN host 的 `lo` 上，
+让该机所有本地回环连接慢 the measured delay（单向）。
+`ping 127.0.0.1` 从 the measured delay 变 the measured delay、隧道 ttfb 从 Ns 变 Ns。
+=> **之前报的「隧道只有线路 31–N% 效率」「每请求 Ns 固定开销」全是这个假象，作废。**
+   教训：`tc qdisc add dev lo` 影响整机回环，测完必须立刻撤销，
+   且每次测前先 `ping 127.0.0.1` 确认干净。
+
+**真实 YouTube 路径分段分解（经生产隧道 the port，the size range，5 轮中位）**：
+
+| 阶段 | 耗时 |
+|---|---|
+| dns | Ns |
+| conn（到本地代理） | Ns |
+| **pre（HTTP CONNECT 完成）** | **Ns** |
+| tls | Ns |
+| ttfb | Ns |
+
+=> **握手成本 Ns ≈ N 个 RTT**（隧道底层 RTT the measured delay）= mux 流建立 + CONNECT + TLS 各 1 RTT。
+   ⇒ **降起播要减少往返次数，不是调 mux 数。**
+
+**the VPS → YouTube CDN 这段正常，可排除**：
+
+| 并发 | 聚合 | 中位 TLS | 中位 TTFB |
+|---|---|---|---|
+| 1 | the measured rate | Ns | Ns |
+| 4 | the measured rate | Ns | Ns |
+
+**mux 数实验的坑**：用独立第二客户端实例测时，它的 carrier 走**临时 IPv6 地址**，
+而生产实例的 carrier **全部绑定 `%eth0`**（指定出口网卡）⇒ 两条路径不同，
+测出来的差异是**路径差异不是 mux 数差异**。
+同一实例 mux=2 vs mux=12：pre N vs Ns ⇒ **mux 数对握手成本无影响**。
+
+⚠️ **做「生产 mux=2」实验需改 systemd 参数并重启现网服务，未执行（等授权）。**
+
 ### ⚠️ 两个工具/口径陷阱（都踩过）
+
 
 
 
