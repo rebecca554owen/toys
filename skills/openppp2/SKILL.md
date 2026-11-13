@@ -4141,7 +4141,41 @@ the measured rate 是「维持缓冲的速率」不是「可用带宽」。
 => **可优化点是「让 ABR 看到真实带宽」**：降低每请求固定开销（N RTT）、
    或增大分段（the size 是 the size 的 64 倍）。**换更快出口没必要**（已 256–the measured rate，够 4K）。
 
+### 为什么 YouTube 会降档 —— ABR 用的是「单分段瞬时速率」（2026-11-13 浏览器实测）
+
+**它不是「不保持分辨率」，而是「保持不了」。**
+
+**关键观测**：同一个视频，内置浏览器里画质菜单先显示「自动 (720p60)」，
+缓冲积累后自己变成「**自动 (2160p60 4K)**」；stats 显示 `b:N-N`（缓冲 N 秒）、
+Buffer Health Ns。⇒ **播放器确实在「保持分辨率慢慢缓冲」，缓冲够了就升回 4K。**
+
+**真正的机制**：ABR 的带宽估计来自「**单次分段请求的瞬时速率**」，不是线路持续带宽。
+同一时刻同一条线路：
+
+| ABR 看到的 | 真实持续带宽 |
+|---|---|
+| the size → **the measured rate** | **the measured rate** |
+| the size → the measured rate | |
+| the size → the measured rate | |
+| the size → the measured rate | |
+
+=> **差 N 倍**。分段越小，测得越低。
+
+**每请求固定开销 Ns ≈ N 个 RTT**（本地 TCP Ns + 代理→mux→目标首字节 Ns；
+RTT the measured delay）。the size 分段里 Ns 全是开销。
+
+**直连也一样慢**（真 Range 源站：the size 直连 N vs 隧道 the measured rate）⇒ 不是 mux 的问题。
+隧道与直连真实能力等效（the size: N vs N；the size: N vs N；the size: N vs the measured rate）。
+
+**完整因果链**：真实带宽 the measured rate → SABR 逐分段 POST（实测 16 个 type=fetch 请求）→
+每分段付 Ns 固定开销 → ABR 看到 the measured rate → 判定带宽不足 → 降档 →
+分段更小测得更慢 → **锁死最低档**；但缓冲仍在累积 → 够深后爬回 4K。
+
+=> **可操作方向**：① 加大分段（the size 是 the size 的 64 倍）；② 降低每请求固定开销
+   （省一个 RTT = the measured delay）；③ **不要在客户端限制码率上限**（会让 ABR 更早降档）。
+
 ### ⚠️ 两个工具/口径陷阱（都踩过）
+
 
 
 
