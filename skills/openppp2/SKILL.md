@@ -3756,401 +3756,27 @@ slot2 = balance（竞争法 + 每流定序，生产主力，见「生产主力�
   日志 stall / flow reset / rtx exhausted **全部为 0** ⇒ 没有任何流被杀。
 - **1G 单流三窗口全部完整传完** ⇒ 历史上「大文件单条传输被掐断」在 v2.3.0 上不再复现。
 
-### ⚠️ 源站就是 the VPS 本机 —— 直连与隧道走的是同一条线路
+### YouTube 画质降档、mux 隧道与路径事实（2026-11-09 ~ 11-13 合并）
 
-源站 `the address:the port` **就是 the VPS 这台机器的公网 IP**（`hostname -I` 已确认，
-`ip route get` 显示 local 路由）。所以：
+> 完整证据与数据见 `notes/youtube-mux-summary-20261113.md`。这里只留判读结论。
 
-- 直连基线 = the LAN host → the VPS（公网）
-- 隧道 = the LAN host → the VPS（公网）→ 回到 the VPS 本机的源站
-  ⇒ **两者走的是同一条 the LAN host↔the VPS 线路**，不是两条路。
-  ⇒ 隧道比直连快，说明**瓶颈在 the LAN host↔the VPS 这条线路 + 协议栈**，不在隧道封装本身。
-  ⇒ 「直连基线」可以当作**这条线路的裸上限参考**，隧道值超过它就说明隧道在复用/优化同一条路径。
+**路径事实**：源站 `the address:the port` **就是 the VPS 本机** ⇒ 直连与隧道走同一条 the LAN host↔the VPS 线路。
 
-实测（2026-11-09 14:xx，the LAN host 本机发起）：
-
-| 方式 | 单流 | 4 流 | 备注 |
+| 链路 | RTT | 丢包 | 带宽 |
 |---|---|---|---|
-| 直连 IPv4 | the measured rate | the measured rate | RTT the measured delay |
-| 直连 IPv6 | **the measured rate** | **the measured rate** | **RTT the measured delay** |
-| 隧道 conc=1 | N（the port）/ N（the port） | — | 走 IPv6 |
-| 隧道 conc=4 | N（the port）/ N（the port） | — | 走 IPv6 |
-
-⚠️ **IPv4 和 IPv6 是两条质量完全不同的路径**：
-the LAN host↔the VPS 的 **IPv6 RTT the measured delay、带宽 the measured rate**；**IPv4 RTT the measured delay、带宽 the measured rate**。
-隧道客户端配的是 IPv6 地址（`ppp://[2403:...]:the port/`），所以隧道走的是好路径。
-而 `mux-measure.sh` 的直连基线走 **IPv4** ⇒ **基线一直在给一条更差的路径做参照**。
-
-⇒ 之前所有「晚高峰劣化」「窗口差异」的判定，基线都建在 IPv4 上；
-   **「线路不好」这个判断需要重新审视** —— IPv6 上线路本身可以跑到 the measured rate，
-   IPv4 上的 the measured delay / N% 丢包是 **IPv4 路径的问题**，不是这条线路的固有问题。
-⇒ 测量脚本的直连基线应该改成走 IPv6（与隧道同路径），否则基线没有可比性。
-
-### YouTube「Connection Speed」不是带宽测速（2026-11-09 查清）
-
-YouTube 播放器右下角那个 `Connection Speed` **不是 speedtest**：
-- `speedtest.youtube.com` 解析到 `2001::1`（RFC 4380 保留地址）⇒ **没有真实测速端点**。
-- 那个数字是 Google 按**当前视频档位的码率需求** + 实际取流表现给出的**估算值**，
-  **封顶在视频码率上**，线路再快也不会更高。
-  ⇒ the measured rate ≈ 1080p 高码率档的量级，**不是**线路上限。
-
-现网实测（2026-11-09）：
-
-| 测量 | 结果 |
-|---|---|
-| the LAN host → youtube.com **直连** | **http=N 超时 Ns**（IPv4 `the address` 超时；IPv6 `N::1` 黑洞） |
-| the LAN host → youtube.com **走隧道 the port** | **http=N，Ns** |
-| the LAN host → 隧道 → the VPS 源站 the size | **N / the measured rate**（the port / the port） |
-| the VPS → Google 单连接 | **the measured rate** |
-| the VPS → Hetzner 单连接 | **the measured rate** |
-| the VPS → Google/Hetzner 4 连接 | **the measured rate** |
-
-⇒ **the LAN host 直连 YouTube 不通，隧道是唯一通路**。
-⇒ **KCC 已在跑**（二进制含 `cc_kcc.cpp` 全套符号，运行时 `--tcp-stack=xtcp` 无降级）；
-   BBR（`cc_bbrv1.cpp`）也编入。XTCP 是用户态栈，不依赖内核 CC。
-⇒ **mux 不是瓶颈**：隧道内层 745–the measured rate，远超 YouTube 播放需求。
-⇒ 真正的天花板是 **the VPS 出网 135–the measured rate**，且**单连接只有 135–the measured rate**、
-   4 连接才 the measured rate ⇒ **单 TCP 流被 RTT/丢包限住**，多连接能翻倍。
-   想提升 YouTube 体验，该优化的是 **the VPS → Google 的出口路径**，不是 mux 的 CC。
-
-### YouTube 限速机制：已实测确认（2026-11-11，非高峰）
-
-用户提出的机制假设**方向正确**，但有三处必须修正。
-
-**1. 阈值真实存在且可精确定位：11,834,240 字节（the size）。**
-同一 DASH URL（itag=299）逐档测 range：11,the size → the measured rate；11,the size → the measured rate。
-两档 **TTFB 相同（Ns）** ⇒ 是**传输中途**被压速，不是排队。
-
-**2. 限速速率不是固定 the measured rate，而是「平均码率 x 2」。** 逐条验证：
-720p N→N、1080p N→N、1080p N→N、1440p N→N、
-4K N→N、4K N→the measured rate —— **全部精确 2x**。
-
-**3. 「HLS 不受影响」不成立：`sq` 参数不改变限速**（sq=0/1/2 都是约 the measured rate）。
-限速绑定的是**单次 HTTP 响应体大小**。HLS 体感正常是因为**每段只有几 MB**，
-天然落在阈值以下 —— 受益的是「段小」，不是「HLS 协议」。
-
-**4. 还有每 URL 的累计配额**：同一 URL 连续 the size range，
-前 3 段（累计 the size）都很快，**第 4 段（累计 the size）起降到约 the measured rate**。
-播放器切清晰度换 URL 后恢复 —— 这解释了「掉分辨率后又能起播」。
-
-**5. 隧道内外限速完全一致** ⇒ 限速是 YouTube 侧的，mux 无辜：
-
-| range | the VPS 直连 | the LAN host 经隧道 |
-|---|---|---|
-| the size（阈值内） | the measured rate（ttfb Ns） | the measured rate（ttfb **Ns**） |
-| the size（超阈值） | the measured rate | **the measured rate** |
-
-**6. 隧道的真实代价是约 Ns 固定 TTFB，不是带宽**：
-各档 TTFB 恒定 N–Ns（the size / the size / the size / the size 都一样），
-速度随请求大小线性增长 ⇒ 小请求延迟主导，大流量不受影响。
-
-**可操作推论**：the measured rate 是「当前档位码率 x 2」的天花板。
-4K60 AV1（the measured rate）配额 the measured rate 够用；一旦降到 1080p（the measured rate），
-配额只剩 the measured rate ⇒ **掉分辨率后卡顿是配额机制的必然结果，不是线路问题**。
-唯一值得优化的 mux 侧点是**减少 mux 流建立往返 / 连接复用**（影响起播与切清晰度）。
-
-⚠️ **URL 的 `ip=` 参数绑定出口 IP**：the LAN host 直连签发的 URL 在 the VPS 上无效（反之亦然），
-隧道测试必须在 the LAN host 侧用 `-x http://127.0.0.1:the port` 且加 `-L` 跟随重定向。
-
-### `--tun-mux` 不是载波数（2026-11-11 实测）
-
-`--tun-mux=N` 是**协商基线 base**，不是最终载波数：
-- client 侧（`VEthernetExchanger.cpp:2412`）：**只有 flow 模式 + `mux.turbo=true`**
-  才把上限抬到 `base x PPP_MUX_TURBO_FACTOR_MAX`（3）。
-- server 侧（`VirtualEthernetExchanger.cpp:1410`）：**只要 flow 模式**就抬到 `base x 3`
-  （server 拿不到 client 的 turbo 标志）。
-- turbo 控制器（`vmux_net.cpp:4765`）在 `grow_ready` 时持续涨到 `target = base x factor`。
-
-=> 想真正限制载波数，只能 **关 `mux.turbo`**。
-
-**lab 实测（flow 模式，the LAN host 回环）：**
-
-| --tun-mux | 实际 links | TTFB(the size x8) min/med/avg | the size |
-|---|---|---|---|
-| 2 | 2 | N / N / N | the measured rate |
-| 4 | 2 | N / N / N | the measured rate |
-| N | N | N / N / N | the measured rate |
-
-=> **载波数从 2 到 12，起播延迟无可测量差异（都在 N–Ns）。**
-
-**为什么（时序分解，生产隧道）：**
-- mux 流建立（明文目标 TTFB 走隧道）：**N–Ns**
-- the LAN host 直连同目标无隧道：**Ns**
-- 代理 CONNECT + TLS 握手（额外）：**N–Ns**
-
-=> mux 复用已建立的载波，新流只走 N 个 RTT 的 SYN/ACK，**不随载波池大小变化**。
-=> 那 Ns 主要来自 **TLS 握手 + 大 range**，与载波数无关。
-
-=> **想改善 YouTube 起播，方向是「连接复用 / 减少 TLS 往返」，不是调 `--tun-mux`。**
-
-⚠️ **lab 实验的坑**：多个 client 用同一 GUID 连同一 lab server 会互相触发
-`server.session.resume_rejected`，表现为 `phase=reconnecting` + `mode=compat` 降级 + `code=503`。
-**每次实验前必须 kill 全部 lab client 并重启 server。**
-
-### 隧道连接复用对起播 TTFB 的实测收益（2026-11-11 lab 验证）
-
-**结论：复用只省约 the measured delay（N%），救不了 YouTube 的 Ns。**
-
-**先厘清 Ns 的构成**：
-- the size range（超阈值）：**N–Ns**
-- 阈值内的 range：N–Ns
-- 明文小请求走隧道（无 TLS）：**N–Ns**（直连同目标 Ns）
-- 代理 CONNECT + TLS：额外 **N–Ns**
-
-=> **大 range 的 Ns 大头是 YouTube 侧限速，不是握手慢。**
-
-**lab 实验（the LAN host /opt/ppp-lab，netem 加 the measured delay 单向延迟模拟 RTT）**：
-
-| 组别 | TTFB min/med/max/avg |
-|---|---|
-| 复用一条代理连接（6 请求） | N / N / N / **Ns** |
-| 每次新建代理连接（6 请求） | N / N / N / **Ns** |
-
-**生产隧道（真实 RTT the measured delay）**：
-
-| 组别 | TTFB 均值 |
-|---|---|
-| 复用 | **Ns** |
-| 不复用 | **Ns** |
-
-**复用确实生效**（mux 计数器）：同一代理连接内 5 个请求，
-`mux.link.recv` 增量 37（**N 帧/请求**）vs 不复用 89（**N 帧/请求**）⇒ 省 N% 的帧。
-
-=> **该省的都省了，只是总量本来就小** —— 复用省的是**帧**，不是**往返**。
-
-⚠️ **测连接复用必须换 keep-alive 源站**：
-原 `origin-cpp` 固定返回 `Connection: close`，复用根本不可能生效；
-lab 里改用 `python3 http.server`（`protocol_version="HTTP/N"`）。
-
-⚠️ **lab 回环测不出往返收益** ⇒ 必须 `tc qdisc add dev lo root netem delay the measured delay`
-人工加延迟，测完 `tc qdisc del dev lo root` 撤销。
-
-=> **真正能改善 YouTube 的是「保住高清晰度档位」（配额 = 码率 × 2）**
-   与「换更快的出口路径」，不是连接复用，也不是调 `--tun-mux`。
-
-### 非高峰复核：the measured rate 是隧道实到速率，且隧道只有线路的 31–N%（2026-11-12）
-
-用户截图（非高峰，4K60 AV1）：**Connection Speed = the measured rate = the measured rate**，Buffer Health Ns，0 dropped。
-
-**实测能复现**：隧道内拉 the size 响应 = **the measured rate**（the size = the measured rate）
-⇒ 截图就是**隧道内的实到速率**，不是播放速率估算。
-
-⚠️ **更正昨天的「配额 = 码率 x 2」模型**：那是 **curl 单次大 range** 的行为；
-真实播放器用**小分段 + 多连接**，不会触发 the size 单响应限制。
-
-**the VPS 出网现在极充足**（同一时刻实测）：
-
-| 测项 | 结果 |
-|---|---|
-| the VPS -> Google 单连接 | **the measured rate** |
-| the VPS -> Google 4 连接 | **the measured rate** |
-| the VPS -> YouTube 播放器式（the size x 4conn） | **the measured rate** |
-| the VPS -> YouTube 4 连接 | **the measured rate** |
-
-⇒ **线路完全不是瓶颈**（昨天测到的 135–the measured rate 是当时窗口状态，已大幅好转）。
-
-**但发现真问题：mux 隧道只有线路的 31–N%**
-
-同时刻、同一 the LAN host<->the VPS 线路（源站在 the VPS 本机，只差一层隧道），5 轮中位数：
-
-| 并发 | 直连 IPv6 | 经 mux 隧道 | 隧道保留 |
-|---|---|---|---|
-| 1 | **the measured rate** | **the measured rate** | **N%** |
-| 4 | **the measured rate** | **the measured rate** | **N%** |
-
-- 不是 CPU 瓶颈（测隧道时 the LAN host N% idle，ppp 进程 CPU 6–N%）。
-- 隧道内**每请求约 Ns 固定开销**：the size→the measured rate、the size→the measured rate、the size→the measured rate、the size→the measured rate
-  （耗时 ≈ Ns 固定 + 字节/带宽）⇒ **小分段请求被固定开销主导，这是起播慢的直接原因**。
-
-=> **下一步该优化 mux 隧道效率（31–N%）与每请求 Ns 固定开销**，
-   而不是继续折腾线路或 YouTube 侧。
-
-### YouTube 路径定位：握手成本 = N 个 RTT，与 mux 数无关（2026-11-12）
-
-⚠️ **先记一个我自己踩的坑**：实验脚本把 `tc netem delay the measured delay` 留在 the LAN host 的 `lo` 上，
-让该机所有本地回环连接慢 the measured delay（单向）。
-`ping 127.0.0.1` 从 the measured delay 变 the measured delay、隧道 ttfb 从 Ns 变 Ns。
-=> **之前报的「隧道只有线路 31–N% 效率」「每请求 Ns 固定开销」全是这个假象，作废。**
-   教训：`tc qdisc add dev lo` 影响整机回环，测完必须立刻撤销，
-   且每次测前先 `ping 127.0.0.1` 确认干净。
-
-**真实 YouTube 路径分段分解（经生产隧道 the port，the size range，5 轮中位）**：
-
-| 阶段 | 耗时 |
-|---|---|
-| dns | Ns |
-| conn（到本地代理） | Ns |
-| **pre（HTTP CONNECT 完成）** | **Ns** |
-| tls | Ns |
-| ttfb | Ns |
-
-=> **握手成本 Ns ≈ N 个 RTT**（隧道底层 RTT the measured delay）= mux 流建立 + CONNECT + TLS 各 1 RTT。
-   ⇒ **降起播要减少往返次数，不是调 mux 数。**
-
-**the VPS → YouTube CDN 这段正常，可排除**：
-
-| 并发 | 聚合 | 中位 TLS | 中位 TTFB |
-|---|---|---|---|
-| 1 | the measured rate | Ns | Ns |
-| 4 | the measured rate | Ns | Ns |
-
-**mux 数实验的坑**：用独立第二客户端实例测时，它的 carrier 走**临时 IPv6 地址**，
-而生产实例的 carrier **全部绑定 `%eth0`**（指定出口网卡）⇒ 两条路径不同，
-测出来的差异是**路径差异不是 mux 数差异**。
-同一实例 mux=2 vs mux=12：pre N vs Ns ⇒ **mux 数对握手成本无影响**。
-
-⚠️ **做「生产 mux=2」实验需改 systemd 参数并重启现网服务，未执行（等授权）。**
-
-### mux 会话 vs mux 流：CONNECT 在 mux 内，不会新建一堆 mux（2026-11-12）
-
-**必须区分两层：**
-
-| 层 | 是什么 | 数量 | 何时建立 |
-|---|---|---|---|
-| **mux 会话 / carrier** | the LAN host->the VPS 的底层 TCP 连接（= `--tun-mux`） | **N 条，恒定** | 建链时一次建好，**不随请求增长** |
-| **mux 流 / flow** | carrier 内承载一条到目标的逻辑连接 (cid) | 按需 | 每个到目标的 TCP 连接一条 |
-
-**实测（10 个请求前后）**：
-
-| 指标 | BEFORE | AFTER | delta |
-|---|---|---|---|
-| **carrier TCP 连接数 (->the VPS:the port)** | **N** | **N** | **0** |
-| mux.rx.flow.refused / unknown_cid / syn_ok.refused / closed_flow.drop | — | — | **全部 0** |
-| mux.link.send / link.recv | N / N | N / N | **+N / +N**（纯数据帧） |
-
-=> **看 YouTube 不会新建 mux 会话，也没有新建 flow，只有数据帧。**
-
-**那 Ns 的 mux 净开销从哪来**（同目标 gstatic 两条路径）：
-
-| 路径 | dns | conn | pre(CONNECT) | ttfb |
-|---|---|---|---|---|
-| the LAN host 直连 | N | N | **N** | N |
-| the LAN host 经 mux | N | N | **N** | N |
-
-=> mux 净开销 = **Ns（约 N RTT）**。
-
-**机制**：`vmux_skt.cpp:438` 客户端 `post(cmd_syn, host:port)` -> `vmux_net.cpp:1874`
-服务端 `process_rx_connecting` 去和目标建 TCP -> 回 `cmd_syn_ok`。
-客户端**等 cmd_syn_ok** 才能继续 = N 个 RTT（the measured delay）；
-服务端到目标的 TCP 建连与它并行，不额外加往返。
-
-=> **`--tun-mux` 控制载波池，不控制 flow 数 ⇒ 调小它省不了这个 RTT。**
-
-**能省这 Ns 的方向**：flow 复用（同 host:port 复用已建 flow，跳过 cmd_syn/cmd_syn_ok）、
-乐观建连（不等 cmd_syn_ok 先发数据）、TLS 会话恢复
-（但 TLS 是 the LAN host<->目标 端到端的，隧道只搬字节，**隧道侧不能代为优化**）。
-
-### flow 复用 vs Keep-Alive：Keep-Alive 已天然存在（2026-11-12 代码评估）
-
-**CONNECT 隧道模式（YouTube 走这个）= 一条 CONNECT = 一条 flow = 一条到目标的 TCP**，
-隧道内全程复用这条 flow（`VEthernetHttpProxyConnection.cpp:378` TunnelMode 分支纯字节 pipe）。
-⇒ **「Keep-Alive」在 mux 层的等价物已经免费有了，不需要实现。**
-
-**真正的浪费在普通 HTTP 代理模式（absolute-form）**：每个请求都调 `ConnectBridgeToPeer`
-（`VEthernetHttpProxyConnection.cpp:333`）→ 每请求一条新 flow。
-
-**HTTPS 下「让新连接复用旧 flow」架构上不可行**：
-`vmux_net.cpp:3662` `process_rx_connecting` 每条 flow 单独 `accept(host:port)` 建一条到目标的 TCP；
-`vmux_skt.h:173/178` 里 `connection_id_` 与 `tx_socket_` 绑定在同一个 `vmux_skt`。
-flow ≡ 一条到目标的 TCP，而 **TLS 是 the LAN host<->目标 端到端**的，服务端看不到 TLS 层，
-无法把两条 TLS 会话塞进同一条 TCP（除非 TLS 终结，那会破坏端到端加密）。
-
-| 方案 | 难度 | 收益 |
-|---|---|---|
-| A. 普通 HTTP 模式做目标连接池 | 中（~N–N 行） | 明文 HTTP 每请求省 1 RTT |
-| B. HTTPS 下复用旧 flow | **不可行** | — |
-| C. 乐观建连（不等 cmd_syn_ok） | 低–中 | 可能省 1 RTT（`vmux_skt.cpp:438` 已有雏形） |
-| D. 减少 `--tun-mux` | **无效** | 0 |
-
-### 浏览器实测（比 curl 直观）—— YouTube 现在用 SABR/UMP
-
-方法（可复用）：独立 Edge + `--proxy-server=http://the address:the port`（确实走 the LAN host 隧道）
-+ `--remote-debugging-port` 用 CDP 读 `getStatsForNerds()`。
-
-**四个发现**：
-
-1. **`bandwidth_kbps` 是 SABR 预估值，不是实测速率**（`bandwidth_samples` 全同值、
-   `network_activity_bytes` 恒 `the size`）⇒ 不能当带宽实测用。
-2. **YouTube 现在用 SABR/UMP**（`debug_info` 含 `SABR`，响应 MIME `application/vnd.yt-ump`），
-   **不是传统 DASH range** ⇒ **基于 curl Range 的限速结论不能直接套到播放器上**。
-3. **一次播放会话建 43+ 条 flow 且大量被拒**（`closed_flow.drop +43`、`flow.refused +116`、
-   `syn_ok.refused +53`），而 **carrier 始终 13 条**。
-4. **播放器在反复建 flow 且被拒**：N 秒只走 ~190 帧（约 the size），远低于视频流需求。
-
-⚠️ **未拿到「持续播放 N 秒的实际取流速率」**：CDP 合成输入不算真实用户激活，
-播放卡在缓冲（`vt` 恒 0、`buffer_health` Ns、`res 0x0@60`）。
-且 **CDP Network 域看不到 UMP POST 的响应体**（SABR 服务端推流），字节数只能从 the LAN host mux 计数器读。
-
-=> **优先查「SABR/UMP」与「flow 被拒」两条线**，比调 mux 数有价值得多。
-
-### `mux.rx.flow.refused` 的语义与判读规则（2026-11-12 代码核实 + 浏览器实测）
-
-`refuse_flow()`（`vmux_net.cpp:2212`）是**唯一**递增 `mux.rx.flow.refused` 的地方
-（`vmux_net.cpp:2218`），它**只做一件事**：回 `cmd_syn_ok` 带 'N'，
-告诉对端「这条 flow 我这边没有，别再重传」。
-
-| 触发点 | 位置 | 同增的计数器 | 含义 |
-|---|---|---|---|
-| A. 已关闭 flow 的重传帧超出 DSN 前沿 | `vmux_net.cpp:2413-N` | `mux.rx.closed_flow.drop` | 对端重传一条**已结束**的流 |
-| B. 完全未知的 cid | `vmux_net.cpp:2430` | 无 | 对端有这条流、我这边没有 |
-
-**判读规则（单看 flow.refused 增长没有意义）**：
-
-| 现象 | 含义 | 要不要管 |
-|---|---|---|
-| `flow.refused` 与 `closed_flow.drop` **同时 +1** | 对端重传已结束的流 | **不用管**（正常收尾） |
-| `flow.refused` 单独涨、`closed_flow.drop` 不动 | 触发点 B：flow 状态丢失 | **要查** |
-| `syn_ok.refused` 涨但 `refused` 不涨 | 服务端拒绝我们的建连 | **要查** |
-| `flow.reset` / `rtx.exhausted` 涨 | 真丢流 / 重传耗尽 | **要查** |
-
-**浏览器实测（in-app Browser + 真实点击播放，N 秒采样）**：
-`closed_flow` 与 `refused` **全程为 0**，carrier 恒定 12 条，
-`mux.rx.flow.reack` 从 6 涨到 196（正常重传确认）。
-⇒ 那次 `flow.refused = 1` 是 **slot2 会话重建**时的一次性收尾
-（16:26:02 一批 socket closed → 16:26:03–16:26:09 重开 10 条 link），
-不是稳态问题。
-
-⚠️ **会话重建期间对应 slot 的 carrier 短暂为 0**，那段时间走该 slot 的流量会失败 ——
-排查「偶发 502/连不上」时要看这个时间窗。
-
-### YouTube Connection Speed 的真正原因：不是线路，是 ABR 被小分段误导（2026-11-13）
-
-**结论：线路和 mux 都没问题（同路径实测 256–the measured rate），
-是 YouTube 的 ABR 用「被小分段 + 固定开销压低的取流速率」判断带宽，误判成不足 ⇒ 主动降档。**
-
-**路径事实**：the LAN host→the VPS IPv6 **the measured delay / N% 丢包**，carrier 26 条，隧道全通。
-
-**mux 隧道是稳的**：分小时 link close/open —— 20 时 0/0、21 时 0/0、22 时 0/12、23 时 0/0；
-00 点的 168 次 close **全是压力测试造成的**（`record header read FAILED err=101`，
-载波传 the size 后被切断 ⇒ 会话重建）。
-
-**两条路径等效**（真实浏览器路径 SS vs 隧道，the size/the size/the size）：
-N/N/N vs N/N/the measured rate ⇒ 差异 ±N%，**mux 无额外损耗**。
-
-**分段大小决定有效速率**（隧道，5 轮中位）：
-the size→N、the size→N、the size→N、the size→N、the size→the measured rate（跨 64 倍）。
-**直连也同样慢**（真 Range 分块源站对比：the size 直连 N vs 隧道 the measured rate）⇒ 瓶颈不在隧道。
-每请求固定开销 **Ns ≈ N RTT**（the measured delay/个）。
-
-**用户截图自证**（1080p60 档）：Connection Speed the measured rate、Network Activity the size、
-Buffer Health **Ns**、0 dropped ⇒ **缓冲已经够，播放器只维持最低限度的取流**，
-the measured rate 是「维持缓冲的速率」不是「可用带宽」。
-**Current Res 2560x1440 vs Optimal 3840x2160** ⇒ YouTube **主动降档**，这才是模糊的根因，
-并形成「降档→码率需求降→缓冲久→更稳定」的自强化低清循环。
-
-=> **可优化点是「让 ABR 看到真实带宽」**：降低每请求固定开销（N RTT）、
-   或增大分段（the size 是 the size 的 64 倍）。**换更快出口没必要**（已 256–the measured rate，够 4K）。
-
-### 为什么 YouTube 会降档 —— ABR 用的是「单分段瞬时速率」（2026-11-13 浏览器实测）
-
-**它不是「不保持分辨率」，而是「保持不了」。**
-
-**关键观测**：同一个视频，内置浏览器里画质菜单先显示「自动 (720p60)」，
-缓冲积累后自己变成「**自动 (2160p60 4K)**」；stats 显示 `b:N-N`（缓冲 N 秒）、
-Buffer Health Ns。⇒ **播放器确实在「保持分辨率慢慢缓冲」，缓冲够了就升回 4K。**
-
-**真正的机制**：ABR 的带宽估计来自「**单次分段请求的瞬时速率**」，不是线路持续带宽。
-同一时刻同一条线路：
+| the LAN host → the VPS **IPv6**（隧道底层） | **N–the measured delay** | N% | **the measured rate**（持续流） |
+| the LAN host → the VPS IPv4 | N–the measured delay | N% | — |
+| the VPS → Google（1 / 4 连接） | the measured delay | — | **N / the measured rate** |
+| the VPS → YouTube CDN（1 / 4 连接） | — | — | **N / the measured rate** |
+
+⚠️ **早前的「晚高峰劣化」判定基线建在 IPv4 上**（隧道走 IPv6）⇒ **「线路不好」需重新审视**。
+测量脚本的直连基线应改走 IPv6，否则没有可比性。
+
+⚠️ **浏览器实际路径不是 the LAN host mux 隧道**：Clash 的 `ppp` 节点是 Shadowsocks
+（`the origin host:the port` = the VPS）⇒ **Mac → Clash → SS(the VPS) → YouTube**。
+分析浏览器体验时，the LAN host 的 mux 隧道**不在路径上**。
+
+**① YouTube 降档的机制 = ABR 用「单分段瞬时速率」当带宽估计**：
 
 | ABR 看到的 | 真实持续带宽 |
 |---|---|
@@ -4159,47 +3785,60 @@ Buffer Health Ns。⇒ **播放器确实在「保持分辨率慢慢缓冲」，�
 | the size → the measured rate | |
 | the size → the measured rate | |
 
-=> **差 N 倍**。分段越小，测得越低。
+=> **差 N 倍**。每请求固定开销 **Ns ≈ N 个 RTT**（RTT the measured delay）。
+   分段越小 ⇒ 测得越低 ⇒ 降档 ⇒ 分段更小 ⇒ **锁死最低档**。
+   ⇒ **但播放器确实在慢慢缓冲**（实测缓冲 Ns），缓冲够了**自己升回 4K**
+   （画质菜单从「自动 (720p60)」变成「自动 (2160p60 4K)」）。
 
-**每请求固定开销 Ns ≈ N 个 RTT**（本地 TCP Ns + 代理→mux→目标首字节 Ns；
-RTT the measured delay）。the size 分段里 Ns 全是开销。
+**② mux 载波数与会话/流**：
 
-**直连也一样慢**（真 Range 源站：the size 直连 N vs 隧道 the measured rate）⇒ 不是 mux 的问题。
-隧道与直连真实能力等效（the size: N vs N；the size: N vs N；the size: N vs the measured rate）。
+- `--tun-mux=N` 是**协商基线**，不是载波数。flow 模式下双方都把上限抬到 `base x 3`
+  （client `VEthernetExchanger.cpp:2412`、server `VirtualEthernetExchanger.cpp:1410`、
+  turbo 控制器 `vmux_net.cpp:4765`）⇒ 改小它**不能**减少载波，只能关 `mux.turbo`。
+- **mux 会话（carrier）= 13 条恒定**（the LAN host→the VPS 的底层 TCP）；
+  **mux 流（flow）** 才是每个到目标的 TCP 一条。
+  **实测 10 个请求前后 carrier delta = 0、flow 计数器 delta = 0，只有数据帧增加**
+  ⇒ **看 YouTube 不会新建一堆 mux 会话。**
+- **Keep-Alive 已天然存在**：CONNECT 隧道模式（`VEthernetHttpProxyConnection.cpp:378`）
+  一条 CONNECT = 一条 flow，隧道内全程复用。
+  HTTPS 下「新连接复用旧 flow」**架构上不可行**（TLS 端到端，服务端看不到 TLS 层）。
+- 载波数对起播延迟**无影响**（lab：mux=2/4/12 的 TTFB 全在 N–Ns）。
 
-**完整因果链**：真实带宽 the measured rate → SABR 逐分段 POST（实测 16 个 type=fetch 请求）→
-每分段付 Ns 固定开销 → ABR 看到 the measured rate → 判定带宽不足 → 降档 →
-分段更小测得更慢 → **锁死最低档**；但缓冲仍在累积 → 够深后爬回 4K。
+**③ `mux.rx.flow.refused` 的语义**（唯一递增点 `vmux_net.cpp:2218`）：
+服务端发现「对端发来的 flow 我没有」时回 `cmd_syn_ok` 带 'N'。两个触发点：
+A）已关闭 flow 的重传帧超出 DSN 前沿（`cpp:2413-2417`，同增 `closed_flow.drop`）
+B）完全未知的 cid（`cpp:2430`）。
 
-=> **可操作方向**：① 加大分段（the size 是 the size 的 64 倍）；② 降低每请求固定开销
-   （省一个 RTT = the measured delay）；③ **不要在客户端限制码率上限**（会让 ABR 更早降档）。
+| 现象 | 含义 | 要不要管 |
+|---|---|---|
+| `flow.refused` 与 `closed_flow.drop` **同时 +1** | 对端重传已结束的流 | **不用管** |
+| `flow.refused` 单独涨 | 触发点 B：flow 状态丢失 | **要查** |
+| `syn_ok.refused` 涨但 `refused` 不涨 | 服务端拒绝我们的建连 | **要查** |
+| `flow.reset` / `rtx.exhausted` 涨 | 真丢流 / 重传耗尽 | **要查** |
 
-### ⚠️ 两个工具/口径陷阱（都踩过）
+**④ 隧道连接复用的收益**：`mux.link.recv` 每请求 N → N 帧（**省 N% 的帧**），
+但 TTFB 只差 N%（N → Ns）⇒ **复用省的是「帧」，不是「往返」**，
+收益上限就是省一个 RTT（the measured delay）。
 
+**⑤ 附带发现**：the LAN host 的 mihomo 出站节点 `http-0`~`http-5` 指向本机 the port–the port，
+**这些端口上没有服务** ⇒ 走它们的请求全部失败，只能靠 `DIRECT` 兜底。
+（mihomo 已于 2026-11-12 升到 `v1.19.34`。）
 
+### ⚠️ 测量工具的三个坑（都踩过）
 
+**① `tc qdisc` 污染整机回环**：`tc qdisc add dev lo root netem delay the measured delay` 会让
+该机**所有**本地回环连接慢 the measured delay（单向），不只是被测的那个。
+当时 `ping 127.0.0.1` 是 the measured delay、隧道 ttfb 是 Ns，
+据此得出的「隧道只有线路 31–N% 效率」「每请求 Ns 固定开销」**全是假象**。
+⇒ 测完必须 `tc qdisc del dev lo root`；**每次测前先 `ping 127.0.0.1` 确认干净**。
 
+**② awk 32 位溢出**（the LAN host 上是 mawk 1.3.4）：
+`printf "%d"` 输出字节总数时，4xthe size 会被截成 2147483647。
+⇒ 用 `printf "%.0f"`（实测 `sum_bytes=4294967296` 正确）。
+但注意：**老样本里的 bytes 字段是假象**，完整性要看 `short`/`bad_http`/`bad_exit`
+（它们逐流比对，不受总字节溢出影响）。
 
-
-
-
-
-
-
-
-1. **直连基线与隧道走同一条线路，但走的是不同 IP 族**：
-   源站就在 the VPS 本机上，所以两者都是 the LAN host→the VPS；但基线脚本用 IPv4、隧道用 IPv6，
-   两条路径 RTT/带宽差一个量级（the measured delay/the measured rate vs the measured delay/the measured rate）。
-   ⇒ 基线要改成 IPv6 才与隧道可比；
-   ⇒ 「隧道比直连快」说明隧道在复用/优化同一条线路，**不**说明「隧道没有损耗」。
-2. **计数器只能用窗口内增量，不能跨窗口相减**：
-   会话重建会把 `mux.link.*` / `mux.rx.flow.reset` 归零，跨窗口绝对值相减会得到假负值。
-   `mux-compare.py` 已改成按**每个样本自己的 BEFORE→AFTER** 算增量（2026-11-09 修），
-   负值显式标「重置」。
-
-### awk 32 位溢出（the LAN host 上是 mawk 1.3.4）
-
-mawk 用 `printf "%d"` 输出字节总数时，4×the size 会被截成 2147483647。
-已改成 `printf "%.0f"` 并实测 the LAN host 上 `sum_bytes=4294967296` 正确。
-但注意：**老样本里的 bytes 字段是假象**，完整性要看 `short` / `bad_http` / `bad_exit`
-三个计数（它们逐流比对，天然不受总字节溢出影响）。
+**③ mux 会话重建会伪装成故障**：载波被切断（`record header read FAILED err=101`）
+⇒ 全部 link close ⇒ 会话重建 ⇒ **该 slot 的 carrier 短暂为 0**，
+那段时间走该 slot 的流量直接失败。
+排查「偶发 502/连不上」时要看这个时间窗，别当成网络问题。
